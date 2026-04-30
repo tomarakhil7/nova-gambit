@@ -56,19 +56,23 @@
 
       <div class="legend">
         <div class="title">Board</div>
-        <div class="item"><span class="swatch" style="background:rgba(255,210,100,0.3); border:1px solid #ffd066;"></span><b>Center</b> · hold 3+ = +1 Aether</div>
-        <div class="item"><span class="swatch circle" style="background:transparent; border:2px dashed #4de4ff;"></span><b>Fountain</b> · +1 Aether/turn</div>
+        <div class="item"><span class="swatch" style="background:rgba(255,210,100,0.3); border:1px solid #ffd066;"></span><b>Center</b> · strict majority = +1 Aether</div>
+        <div class="item"><span class="swatch circle" style="background:transparent; border:2px dashed #4de4ff;"></span><b>Fountain</b> · +2 Aether per piece (stacks)</div>
         <div class="item"><span class="swatch circle" style="background:#ff2e4a;"></span><b>Bomba</b> · move on to defuse</div>
-        <div class="item" style="color:var(--aether); margin-top:4px;">Base gen: <b>+1 / turn</b></div>
+        <div class="item" style="color:var(--aether); margin-top:6px; line-height:1.5;">
+          <b>Base gen (by turn):</b><br>
+          Turns 1–10: +1 · 11–20: +2 · 21+: +3
+        </div>
       </div>
 
       <div class="legend">
         <div class="title">Piece Status</div>
-        <div class="item"><span class="swatch circle" style="box-shadow:inset 0 0 0 2px #4fc3f7;"></span>Shielded</div>
-        <div class="item"><span class="swatch circle" style="border:2px dotted #aa77ff;"></span>Ghost</div>
-        <div class="item"><span class="swatch circle" style="box-shadow:inset 0 0 0 2px #89cfff;"></span>Frozen</div>
-        <div class="item"><span style="color:#ffd700;">⛓</span> Captor</div>
-        <div class="item"><span style="opacity:0.5;">♙</span> Spectral</div>
+        <div class="item"><span class="swatch circle" style="box-shadow:inset 0 0 0 2px #4fc3f7;"></span><b>Shielded</b> — absorbs 1 hit, lasts 1 turn</div>
+        <div class="item"><span class="swatch circle" style="border:2px dotted #aa77ff;"></span><b>Ghost</b> — phases through pieces this move</div>
+        <div class="item"><span class="swatch circle" style="box-shadow:inset 0 0 0 2px #89cfff;"></span><b>Frozen</b> — skips next turn · blocks castling</div>
+        <div class="item"><span style="color:#ffd700;">⛓</span> <b>Captor</b> — holds a prisoner, cannot move</div>
+        <div class="item"><span style="opacity:0.5;">♙</span> <b>Spectral</b> — can't move, vanishes next turn</div>
+        <div class="item" style="color:var(--text-dim); margin-top:4px;">Hover any piece for its active effects.</div>
       </div>
 
       <div class="legend">

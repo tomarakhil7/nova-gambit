@@ -85,124 +85,124 @@ const POWER_ICONS = {
   [POWER.PROMOTE]: '♛', [POWER.CHRONOBREAK]: '↺', [POWER.VENGEANCE]: '☠', [POWER.WALL]: '▧'
 };
 
-// Full power details for the Compendium
+// Full power details for the Compendium (v3.2)
 const POWER_DETAILS = {
   [POWER.FROST]: {
-    targeting: 'Enemy non-King piece',
-    duration: '1 turn (skipped for target)',
+    targeting: 'Any enemy non-King piece',
+    duration: '1 turn (target skips their next turn)',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Cannot target King, Spectral, captor, already-frozen piece',
-    useCase: 'Disable a defender before you invade. Frost the castling Rook to kill opponent\'s king safety.',
-    counter: 'Simply wait one turn, or move the piece away before it gets frozen. Spend first before Frost lands.'
+    restrictions: 'Cannot target King, Spectral, captors, or an already-frozen piece. A frozen Rook/King blocks castling.',
+    useCase: 'Disable a defender before you invade. Freeze the castling Rook to kill opponent’s king safety.',
+    counter: 'Wait one turn, or move the piece away before Frost lands. Spend Aether quickly to not be caught idle.'
   },
   [POWER.FORTIFY]: {
-    targeting: 'Your own piece',
-    duration: 'Until absorbed (1 attack)',
+    targeting: 'One of your own pieces',
+    duration: '1-hit shield · expires at end of your next turn if unused',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Not usable on Spectral, captor, fragile, already-shielded piece',
-    useCase: 'Shield your exposed Queen or King. Protects against a single capture without moving.',
-    counter: 'Hit the shield with a low-value piece (pawn) to break it; the real threat lands next.'
+    restrictions: 'Not usable on Spectral, captors, or already-shielded pieces. Cannot be stacked.',
+    useCase: 'Protect a Queen deep in enemy territory for one turn. Bait an attacker into wasting a move.',
+    counter: 'Hit the shield with a low-value piece (pawn) to break it; land the real threat next. Or wait one turn — it expires.'
   },
   [POWER.BLINK]: {
-    targeting: 'Your piece → empty square',
+    targeting: 'Your piece (not King) → empty square within a 3×3 grid',
     duration: 'Instant',
     turnEnds: 'Yes',
     canMate: 'No — engine rejects mate-delivering Blink',
-    restrictions: 'Cannot land into self-check. Voids castling rights if on King/Rook.',
-    useCase: 'Escape a pin, reposition deep into enemy territory, defuse a Bomba.',
-    counter: 'Guard landing squares with Aether Block or Frost on the piece first.'
+    restrictions: 'Range limited to the 8 adjacent squares. Cannot land into self-check. Voids castling rights for a moved Rook.',
+    useCase: 'Escape a one-square pin, reposition to an attack diagonal, defuse an adjacent Bomba.',
+    counter: 'Block all 8 adjacent squares of the target piece, or Frost it before it can Blink.'
   },
   [POWER.SPAWN]: {
-    targeting: 'Empty square in your half (ranks 1-4)',
+    targeting: 'Empty square in your half (ranks 1–4 from your side)',
     duration: '1 turn cycle',
     turnEnds: 'No — turn continues',
-    canMate: 'Yes (if spectral pawn gives mate)',
-    restrictions: 'Only in your half. Spectral pawn cannot move, be sacrificed, or be targeted by other powers.',
-    useCase: 'Block an attack lane, give check, or create a temporary defender.',
-    counter: 'Capture the Spectral Pawn or wait one turn — it vanishes on caster\'s next turn start.'
+    canMate: 'Yes (if the Spectral Pawn delivers mate on spawn)',
+    restrictions: 'Spectral Pawn cannot move, be sacrificed for Aether (0 yield), perform en passant, or be targeted by other powers. Occupies a square (blocks castling path).',
+    useCase: 'Block an attack lane, give check, or plug a defensive hole for a turn.',
+    counter: 'Capture the Spectral Pawn, or simply wait — it vanishes on the caster’s next turn start.'
   },
   [POWER.GHOST]: {
-    targeting: 'Your piece — move through pieces this turn',
+    targeting: 'Your piece → destination (phased for this move)',
     duration: '1 move only',
     turnEnds: 'Yes',
-    canMate: 'No',
-    restrictions: 'Cannot land on a King. Piece must make a legal phased move.',
-    useCase: 'Bypass a wall of pawns or your own pieces to attack from unexpected angles.',
-    counter: 'Same as movement defense — guard the destination square.'
+    canMate: 'No — post-move mate check rejects the move',
+    restrictions: 'Cannot land on any King. Absolute pins are still respected (cannot expose own King).',
+    useCase: 'Bypass a wall of pawns or your own blockers to attack from an unexpected angle.',
+    counter: 'Guard the destination square with a defender. Ghost cannot mate, so no lethal surprises.'
   },
   [POWER.BOMBA]: {
     targeting: 'Empty square',
-    duration: '3 turns (detonates)',
-    turnEnds: 'No — turn continues',
-    canMate: 'Can kill King (but Dead-Man\'s Hand applies)',
-    restrictions: 'Only on empty squares. No stacking. Dead-Man\'s Hand: if explosion kills both Kings, planter LOSES.',
-    useCase: 'Area denial around enemy King. Force opponent to move or defuse.',
-    counter: 'Move any piece onto the bomb to defuse — fully risk-free.'
+    duration: '1 turn · detonates at start of your next turn',
+    turnEnds: 'No — turn continues (you still must move)',
+    canMate: 'N/A — Kings are immune to the blast',
+    restrictions: 'Only on empty squares. No stacking. Blast only destroys unshielded ENEMY non-Kings. Your own pieces, Kings, and shielded pieces are safe (shield absorbs 1 then breaks).',
+    useCase: 'Area-denial trap on a square an enemy piece wants to reach. Safely clear clustered unshielded enemies.',
+    counter: 'Move any piece onto the bomb to defuse it. Fortify a threatened enemy piece to absorb the blast.'
   },
   [POWER.CHAIN_LIGHTNING]: {
-    targeting: 'Your piece → enemy → adjacent enemy',
-    duration: 'Instant double capture',
+    targeting: 'Your piece → enemy (1st target) → adjacent enemy (2nd target)',
+    duration: 'Instant double capture; attacker lands on the 2nd target square',
     turnEnds: 'Yes',
     canMate: 'No — engine rejects',
-    restrictions: 'First must be legal capture. Second must be enemy adjacent to first. Breaks shields (1 HP consumed).',
-    useCase: 'Two-for-one trades. Punish clustered defenders.',
-    counter: 'Spread pieces out. Shield the frontline to absorb the first arc.'
+    restrictions: 'First must be a legal capture move. Second must be an enemy non-King adjacent to the first target. Shields absorb 1 hit and end the chain. Cannot leave your King in check (leapfrog-out-of-pin rejected).',
+    useCase: 'Two-for-one trade. Relocate a piece two squares via the 2nd target.',
+    counter: 'Spread pieces out so no two enemies are adjacent. Shield the stronger of the two to end the chain early.'
   },
   [POWER.IMPRISON]: {
-    targeting: 'Adjacent enemy non-King piece',
-    duration: 'Until captor dies',
+    targeting: 'Adjacent enemy non-King piece (captor = your piece)',
+    duration: 'Until captor dies (captive is released on nearest empty neighbor square)',
     turnEnds: 'No — turn continues',
-    canMate: 'Captor can still give/deliver check from its square',
-    restrictions: 'Captor cannot move, be sacrificed, Fortified, Blinked, Ghosted, or targeted by Wall while holding. Cannot imprison frozen/Spectral/nested.',
-    useCase: 'Remove a high-value enemy piece permanently (until captor dies). Holds a Queen with a Pawn.',
-    counter: 'Kill the captor — captive is released on nearest empty square.'
+    canMate: 'Captor can still give/deliver check from its square (via normal-move mate)',
+    restrictions: 'Captor cannot move, be Sacrificed, Fortified, Blinked, Ghosted, or targeted by Wall while holding. Cannot imprison Frozen, Spectral, or already-captor pieces (no nested cages).',
+    useCase: 'Permanently sideline an enemy Queen using a pawn. High-value trade if your captor is cheap.',
+    counter: 'Kill the captor — the captive is released on an adjacent empty square. Promoted form is preserved.'
   },
   [POWER.AETHER_BLOCK]: {
-    targeting: 'Opponent (no square target)',
-    duration: 'Opponent\'s next turn',
+    targeting: 'Opponent (no board target)',
+    duration: 'Opponent’s next turn',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Opponent still gains Aether normally; just cannot spend it. Does NOT cancel active effects.',
-    useCase: 'Prevent incoming power combos. Lock them out right before they afford their ultimate.',
-    counter: 'Save Aether for the turn after — it will resume normally.'
+    restrictions: 'Opponent still GAINS Aether (at turn end) but cannot SPEND it. Does NOT cancel already-active effects like ticking bombs or frozen pieces.',
+    useCase: 'Block a power combo right before it lands. Deny Vengeance at 20+ Aether.',
+    counter: 'Save Aether for the turn after — spending resumes. Stack extra Aether so one blocked turn doesn’t hurt.'
   },
   [POWER.PROMOTE]: {
-    targeting: 'Your pawn (any rank)',
+    targeting: 'Any of your pawns (not Spectral), any rank',
     duration: 'Instant',
     turnEnds: 'Yes',
-    canMate: 'Yes (promotion-check to mate)',
-    restrictions: 'Not usable on Spectral. Must be a pawn.',
-    useCase: 'Skip the promotion race entirely — make a Queen from a distant pawn.',
-    counter: 'Aether Block the turn before. Keep piece pressure on the pawn.'
+    canMate: 'Yes (promotion-check to mate allowed)',
+    restrictions: 'Not usable on Spectral pawns. Must select a concrete type: Q / R / B / N.',
+    useCase: 'Skip the promotion race — make a Queen from a pawn on the 5th rank.',
+    counter: 'Aether Block the turn before. Frost the pawn to freeze it (does not prevent Promote since Promote doesn’t move; but watch Imprison).'
   },
   [POWER.CHRONOBREAK]: {
-    targeting: 'No target (reverts board)',
+    targeting: 'No target (reverts board to pre-opponent-move state)',
     duration: 'Instant',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Cannot be cast on turn 1. Cannot Chronobreak a Chronobreak. Opponent\'s spent Aether is NOT refunded.',
-    useCase: 'Undo a catastrophic blunder or a power-cast that hurts you. Buys tempo.',
-    counter: 'Force the opponent to use it defensively before your ultimate turn.'
+    restrictions: 'Cannot be cast on turn 1 (no prior opponent move). Cannot Chronobreak a Chronobreak. Opponent’s spent Aether is NOT refunded.',
+    useCase: 'Undo a catastrophic blunder. Restore an imprisoned captive. Bring back a defused Bomba.',
+    counter: 'Force the opponent to use it defensively before your real ultimate lands.'
   },
   [POWER.VENGEANCE]: {
-    targeting: 'Any enemy non-King piece',
+    targeting: 'Any enemy non-King piece on the board',
     duration: 'Instant kill',
     turnEnds: 'Yes',
     canMate: 'No — engine rejects',
-    restrictions: 'Bypasses shield (Fortify consumed). Cannot target King.',
-    useCase: 'Remove a critical defender without moving. Skip material trades.',
-    counter: 'No direct counter — economy management. Block their Aether with Aether Block.'
+    restrictions: 'Bypasses the 1st shield (shield absorbs, piece still dies). Cannot target King. Cannot leave your King in check.',
+    useCase: 'Remove a defender far from your pieces, without moving. Skip material trades entirely.',
+    counter: 'Hard to counter directly — economy-starve them with Aether Block. Keep shielded defenders to burn the 1 shield.'
   },
   [POWER.WALL]: {
-    targeting: 'Your piece (anchor)',
-    duration: 'Permanent pawns created',
+    targeting: 'Your piece (the anchor)',
+    duration: 'Permanent pawns',
     turnEnds: 'Yes',
-    canMate: 'Yes (Wall can force mate patterns)',
-    restrictions: 'New pawns cannot spawn on rank 1 or 8. At least 1 empty adjacent square required.',
-    useCase: 'Build an instant fortress, box in the enemy King, trap defenders.',
-    counter: 'Capture the anchor piece or break through the pawn chain.'
+    canMate: 'Yes — can force mate patterns. If Wall creates a STALEMATE, the player with more Aether wins (no draws).',
+    restrictions: 'New pawns skip last-rank squares (no auto-promotion). At least 1 empty adjacent square required. Cannot be used on imprisoned captor.',
+    useCase: 'Build an instant fortress around your King. Box in the enemy King for mate with Wall-pawn diagonals.',
+    counter: 'Capture the anchor piece; surrounding pawns stay. Break through the chain with a Knight or Ghost move.'
   }
 };
 

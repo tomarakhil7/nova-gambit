@@ -72,19 +72,19 @@ const POWER_DISPLAY_NAMES = {
 };
 
 const POWER_DESCRIPTIONS = {
-  [POWER.FROST]: 'Freeze any enemy non-King piece for one full turn. Frozen pieces cannot move and block castling. Turn continues.',
-  [POWER.FORTIFY]: 'Grant 2-HP shield to your piece. Each attack breaks 1 HP (attacker does not move). Turn continues.',
-  [POWER.BLINK]: 'Teleport any of your pieces to an empty square. Turn ends. Cannot deliver checkmate.',
-  [POWER.SPAWN]: 'Summon a Spectral Pawn on an empty square in your half. Vanishes next turn. Turn continues.',
-  [POWER.GHOST]: 'Your piece phases through pieces for 1 turn. Turn ends. Cannot deliver checkmate.',
-  [POWER.BOMBA]: 'Plant a timed bomb on an empty square (3-turn fuse, 3x3 blast). Defusable by moving onto it. Turn continues.',
-  [POWER.CHAIN_LIGHTNING]: 'Capture, then chain to an adjacent enemy. Turn ends. Cannot deliver mate; breaks shields.',
-  [POWER.IMPRISON]: 'Capture an adjacent enemy piece INSIDE yours. Captive released when captor dies. Captor cannot move. Turn continues.',
-  [POWER.AETHER_BLOCK]: "Prevent opponent from spending Aether for their next turn. Turn continues.",
-  [POWER.PROMOTE]: 'Instantly promote any of your pawns to your choice of piece. Turn ends.',
-  [POWER.CHRONOBREAK]: "Undo opponent's last move. Their spent Aether is NOT refunded. Turn continues.",
-  [POWER.VENGEANCE]: 'Directly destroy any enemy non-King piece (bypasses shield). Turn ends. Cannot deliver checkmate.',
-  [POWER.WALL]: 'Spawn friendly pawns on every empty adjacent square around your piece (up to 8). Turn ends.'
+  [POWER.FROST]: 'Freeze one enemy non-King piece for 1 turn. Frozen pieces cannot move and block castling. Turn continues.',
+  [POWER.FORTIFY]: 'Grant a 1-hit shield to your piece. Shield absorbs the next capture attempt (attacker does NOT land), then breaks. Shield expires at end of your next turn if unused. Turn continues.',
+  [POWER.BLINK]: 'Teleport one of your pieces (not King) to any empty square within a 3×3 grid (the 8 adjacent squares). Turn ends. Cannot deliver checkmate.',
+  [POWER.SPAWN]: 'Summon a Spectral Pawn on an empty square in your half (ranks 1–4). It cannot move or be sacrificed and vanishes on your next turn. Turn continues.',
+  [POWER.GHOST]: 'Move your piece through other pieces for 1 turn. Respects pins. Cannot land on a King. Turn ends. Cannot deliver checkmate.',
+  [POWER.BOMBA]: 'Plant a bomb on an empty square. Detonates next turn — destroys unshielded ENEMY non-King pieces in the 3×3 blast. Your pieces, Kings, and shielded pieces are safe. Shields absorb 1 blast then break. Defusable by moving onto the bomb square. Turn continues.',
+  [POWER.CHAIN_LIGHTNING]: 'Capture an enemy piece, then teleport onto an adjacent enemy piece to capture it too. Attacker ends on the 2nd target square. Cannot leave your King in check. Cannot deliver mate. Shields absorb 1 hit and end the chain. Turn ends.',
+  [POWER.IMPRISON]: 'Capture an adjacent enemy non-King piece INSIDE your piece. Captive is released (promoted form preserved) when your captor dies. Captor cannot move while holding. Cannot imprison frozen/Spectral/nested pieces. Turn continues.',
+  [POWER.AETHER_BLOCK]: "Silence your opponent — they cannot spend Aether on their next turn. Active effects still tick. Turn continues.",
+  [POWER.PROMOTE]: 'Instantly promote any of your pawns to Queen, Rook, Bishop, or Knight (not Spectral). Turn ends.',
+  [POWER.CHRONOBREAK]: "Undo opponent's last move. Their spent Aether is NOT refunded. Cannot Chronobreak a Chronobreak. Turn continues.",
+  [POWER.VENGEANCE]: 'Destroy any 1 enemy non-King piece anywhere on the board. Bypasses shield (absorbs 1 then kills). Cannot leave your King in check. Cannot deliver checkmate. Turn ends.',
+  [POWER.WALL]: 'Spawn friendly pawns on every empty adjacent square around one of your pieces (up to 8). Skips promotion squares. If Wall creates a stalemate, the player with more Aether wins (no draw). Turn ends.'
 };
 
 const SACRIFICE_VALUES = {
