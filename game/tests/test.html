@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Mana Chess - Test Runner</title>
+  <style>
+    body { font-family: 'SF Mono', Consolas, monospace; background: #0e1419; color: #e8eef5; padding: 20px; }
+    h1 { color: #3fa7ff; }
+    .group { color: #b479ff; margin-top: 16px; font-weight: bold; }
+    .pass { color: #4fc3f7; }
+    .fail { color: #ff5a7a; }
+    .summary { margin-top: 20px; padding: 12px; background: #161d26; border-radius: 6px; border: 1px solid #2d3b4a; }
+    pre { background: #161d26; padding: 10px; border-radius: 6px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Mana Chess — Browser Test Runner</h1>
+  <p><a href="../index.html" style="color:#3fa7ff">← Back to game</a></p>
+  <pre id="output">Loading...</pre>
+
+  <script src="../js/chess-engine.js"></script>
+  <script src="../js/mana-system.js"></script>
+  <script>
+    // Browser-friendly test runner (minimal)
+    const output = document.getElementById('output');
+    let text = '';
+    let passed = 0, failed = 0;
+
+    function print(msg, cls='') {
+      text += msg + '\n';
+      output.innerHTML = text.replace(/^(▶.*)$/gm, '<span class="group">$1</span>')
+                              .replace(/^(  ✓.*)$/gm, '<span class="pass">$1</span>')
+                              .replace(/^(  ✗.*)$/gm, '<span class="fail">$1</span>');
+    }
+
+    function test(name, fn) {
+      try { fn(); passed++; print(`  ✓ ${name}`); }
+      catch(e) { failed++; print(`  ✗ ${name}: ${e.message}`); }
+    }
+    function assert(c, m) { if (!c) throw new Error(m||'assert fail'); }
+    function assertEq(a, b, m) { if (a !== b) throw new Error(`${m||''}: expected ${b}, got ${a}`); }
+    function group(n, fn) { print(`\n▶ ${n}`); fn(); }
+
+    // Quick smoke tests
+    group('Smoke test', () => {
+      test('Game initializes', () => {
+        const s = initGame();
+        assert(s.board.length === 8);
+        assertEq(s.mana[COLOR.WHITE], 3);
+      });
+      test('Can make opening move', () => {
+        const s = initGame();
+        const r = makeMove(s, 6, 4, 4, 4);
+        assert(r.success);
+      });
+      test('Fortify costs 4 mana', () => {
+        const s = initGame();
+        s.mana[COLOR.WHITE] = 10;
+        castFortify(s, 7, 3);
+        assertEq(s.mana[COLOR.WHITE], 6);
+      });
+      test('Nova dead-man\'s hand triggers', () => {
+        const s = createGameState();
+        s.board = Array.from({length:8},()=>Array(8).fill(null));
+        s.board[7][3] = makePiece(PIECE.KING, COLOR.WHITE);
+        s.board[7][5] = makePiece(PIECE.KING, COLOR.BLACK);
+        s.turn = COLOR.WHITE;
+        s.mana[COLOR.WHITE] = 15;
+        const r = castNova(s, 7, 4);
+        assert(r.deadMansHand);
+        assertEq(s.winner, COLOR.BLACK);
+      });
+    });
+
+    print(`\n\nTotal: ${passed + failed}  Passed: ${passed}  Failed: ${failed}`);
+    print(`\nRun full suite via: node tests/test-runner.js`);
+  </script>
+</body>
+</html>

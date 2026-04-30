@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NOVA Gambit — Aether Battle</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>NOVA GAMBIT</h1>
+      <div id="turn-indicator" class="turn-indicator">Turn 1 — White to move</div>
+      <div class="controls">
+        <button id="open-lobby" title="Play online">🌐 Play Online</button>
+        <button id="open-codex" title="Browse all powers">📖 Powers</button>
+        <button id="open-compendium" title="Full power reference">📜 Compendium</button>
+        <select id="time-mode" class="time-select" title="Time control">
+          <option value="blitz">Blitz 3+2</option>
+          <option value="rapid">Rapid 10+5</option>
+          <option value="classical" selected>Classical 15+10</option>
+          <option value="untimed">Untimed</option>
+        </select>
+        <button id="new-game">↻ New Game</button>
+      </div>
+    </header>
+
+    <!-- LEFT: Players + Clocks + Legend -->
+    <aside class="side-panel left">
+      <div id="player-black" class="player-card">
+        <div class="player-name">
+          <span class="color-dot black"></span>Black
+          <span id="clock-black" class="clock-display">15:00</span>
+        </div>
+        <div class="aether-label">Aether</div>
+        <div class="aether-bar" id="black-aether">
+          <div class="fill" style="width: 0%"></div>
+          <div class="label">1 / 30</div>
+        </div>
+      </div>
+
+      <div id="player-white" class="player-card">
+        <div class="player-name">
+          <span class="color-dot white"></span>White
+          <span id="clock-white" class="clock-display">15:00</span>
+        </div>
+        <div class="aether-label">Aether</div>
+        <div class="aether-bar" id="white-aether">
+          <div class="fill" style="width: 0%"></div>
+          <div class="label">0 / 30</div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="title">Board</div>
+        <div class="item"><span class="swatch" style="background:rgba(255,210,100,0.3); border:1px solid #ffd066;"></span><b>Center</b> · hold 3+ = +1 Aether</div>
+        <div class="item"><span class="swatch circle" style="background:transparent; border:2px dashed #4de4ff;"></span><b>Fountain</b> · +1 Aether/turn</div>
+        <div class="item"><span class="swatch circle" style="background:#ff2e4a;"></span><b>Bomba</b> · move on to defuse</div>
+        <div class="item" style="color:var(--aether); margin-top:4px;">Base gen: <b>+1 / turn</b></div>
+      </div>
+
+      <div class="legend">
+        <div class="title">Piece Status</div>
+        <div class="item"><span class="swatch circle" style="box-shadow:inset 0 0 0 2px #4fc3f7;"></span>Shielded</div>
+        <div class="item"><span class="swatch circle" style="border:2px dotted #aa77ff;"></span>Ghost</div>
+        <div class="item"><span class="swatch circle" style="box-shadow:inset 0 0 0 2px #89cfff;"></span>Frozen</div>
+        <div class="item"><span style="color:#ffd700;">⛓</span> Captor</div>
+        <div class="item"><span style="opacity:0.5;">♙</span> Spectral</div>
+      </div>
+
+      <div class="legend">
+        <div class="title">Active Effects</div>
+        <div id="active-effects" class="active-effects"><div class="ae-empty">No active effects</div></div>
+      </div>
+
+      <div class="legend">
+        <div class="title">Sacrifice</div>
+        <div>Pawn +1 · Minor +2 · Rook +4 · Queen +6</div>
+        <div style="margin-top:4px; color:#ffb347;">1 / turn. Turn continues.</div>
+      </div>
+    </aside>
+
+    <!-- CENTER: Board + Power Deck below -->
+    <main class="board-wrap">
+      <div class="board-labels-files">
+        <span>a</span><span>b</span><span>c</span><span>d</span><span>e</span><span>f</span><span>g</span><span>h</span>
+      </div>
+      <div id="board" class="board"></div>
+      <div class="board-labels-files">
+        <span>a</span><span>b</span><span>c</span><span>d</span><span>e</span><span>f</span><span>g</span><span>h</span>
+      </div>
+
+      <!-- POWER DECK -->
+      <div id="power-deck" class="power-deck">
+        <div class="deck-controls">
+          <button id="sacrifice-btn" class="sacrifice-card" title="Sacrifice a piece for Aether (1/turn)">
+            <span class="sac-icon">⚔</span>
+            <span class="sac-label">Sacrifice</span>
+          </button>
+          <div class="deck-hint" id="deck-hint">Hover a card for details · Click to cast</div>
+        </div>
+        <div id="power-cards" class="power-cards"></div>
+      </div>
+    </main>
+
+    <!-- RIGHT: Log only -->
+    <aside class="side-panel right">
+      <div class="panel-header">Event Log</div>
+      <div id="log" class="log-panel"></div>
+    </aside>
+
+    <div class="status-bar">
+      <div id="status-msg" class="status-msg ok">✦ Welcome to NOVA Gambit — White moves first.</div>
+      <div style="color:var(--text-dim); font-size:11px;">Hotseat — pass the device each turn · ESC to cancel</div>
+    </div>
+  </div>
+
+  <div id="vfx-layer"></div>
+
+  <script src="js/chess-engine.js"></script>
+  <script src="js/mana-system.js"></script>
+  <script src="js/net.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "nova-gambit",
+  "version": "1.0.0",
+  "description": "NOVA Gambit — chess variant with Aether powers. Multiplayer ready.",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "install:server": "cd server && npm install",
+    "postinstall": "cd server && npm install",
+    "test": "cd server && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git"
+  },
+  "license": "MIT"
+}

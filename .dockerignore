@@ -1,0 +1,7 @@
+**/node_modules
+**/.git
+**/.DS_Store
+**/*.md
+!server/README.md
+!server/PROTOCOL.md
+!NOVA_GAMBIT_GDD_v3.0.md
