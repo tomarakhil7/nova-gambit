@@ -3,14 +3,25 @@
 // Serves static client + WebSocket game server on one port.
 // ============================================================
 
+console.log('[boot] starting NOVA Gambit server');
+console.log('[boot] node', process.version, 'cwd', process.cwd());
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+console.log('[boot] loading ws...');
 const { WebSocketServer } = require('ws');
+console.log('[boot] ws loaded');
 const crypto = require('crypto');
 
-const engine = require('../game/js/chess-engine.js');
-const mana = require('../game/js/mana-system.js');
+console.log('[boot] loading game engine...');
+const ENGINE_PATH = path.resolve(__dirname, '..', 'game', 'js', 'chess-engine.js');
+const MANA_PATH = path.resolve(__dirname, '..', 'game', 'js', 'mana-system.js');
+console.log('[boot] engine path:', ENGINE_PATH, 'exists?', fs.existsSync(ENGINE_PATH));
+console.log('[boot] mana path:', MANA_PATH, 'exists?', fs.existsSync(MANA_PATH));
+const engine = require(ENGINE_PATH);
+const mana = require(MANA_PATH);
+console.log('[boot] engine loaded, mana exports:', Object.keys(mana).slice(0, 5).join(','), '…');
 
 const PORT = process.env.PORT || 8765;
 const CLIENT_DIR = path.join(__dirname, '..', 'game');
@@ -417,9 +428,15 @@ setInterval(() => {
   }
 }, 60_000).unref?.();
 
-server.listen(PORT, () => {
-  console.log(`✦ NOVA Gambit server listening on :${PORT}`);
-  console.log(`  Game: http://localhost:${PORT}/`);
-  console.log(`  WS:   ws://localhost:${PORT}/ws`);
-  console.log(`  Health: http://localhost:${PORT}/health`);
+// Bind to 0.0.0.0 explicitly so cloud hosts (Railway, Fly, Render) can reach the process.
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+  console.log(`✦ NOVA Gambit server listening on ${HOST}:${PORT}`);
+  console.log(`  Game:   http://${HOST}:${PORT}/`);
+  console.log(`  WS:     ws://${HOST}:${PORT}/ws`);
+  console.log(`  Health: http://${HOST}:${PORT}/health`);
 });
+
+// Surface unhandled errors so cloud logs show the real reason for a crash
+process.on('uncaughtException', (e) => console.error('uncaughtException:', e));
+process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e));

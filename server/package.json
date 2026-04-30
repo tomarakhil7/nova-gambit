@@ -1,16 +1,11 @@
 {
   "name": "nova-gambit-server",
   "version": "1.0.0",
-  "description": "NOVA Gambit — online multiplayer chess variant server",
+  "description": "NOVA Gambit — server-only package. Dependencies declared at repo root.",
   "main": "server.js",
+  "private": true,
   "scripts": {
     "start": "node server.js",
     "test": "node ../game/tests/test-runner.js && node test-multiplayer.js"
-  },
-  "dependencies": {
-    "ws": "^8.18.0"
-  },
-  "engines": {
-    "node": ">=18"
   }
 }

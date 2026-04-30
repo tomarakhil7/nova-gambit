@@ -5,15 +5,17 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "install:server": "cd server && npm install",
-    "postinstall": "cd server && npm install",
-    "test": "cd server && npm test"
+    "test": "node game/tests/test-runner.js && node server/test-multiplayer.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
   },
   "engines": {
     "node": ">=18"
   },
   "repository": {
-    "type": "git"
+    "type": "git",
+    "url": "https://github.com/tomarakhil7/nova-gambit"
   },
   "license": "MIT"
 }
