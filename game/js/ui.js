@@ -308,22 +308,14 @@ function openLobby() {
 
   const statusEl = document.getElementById('lobby-status');
   const setLobbyStatus = (msg, kind = 'ok') => {
+    if (!statusEl) return;
     statusEl.textContent = msg;
     statusEl.className = 'lobby-status ' + kind;
   };
+  UI._setLobbyStatus = setLobbyStatus;
 
   NET.onError = (e) => setLobbyStatus(e.message || 'Connection error', 'err');
-  NET.onRoomUpdate = (m) => {
-    localStorage.setItem('ng_name', document.getElementById('lobby-name').value || 'Player');
-    if (m.status === 'WAITING') {
-      setLobbyStatus(`Room created: ${m.code} — share this code!`, 'ok');
-      showWaitingForOpponent(m.code);
-    } else if (m.status === 'PLAYING') {
-      document.getElementById('lobby-backdrop')?.remove();
-      document.getElementById('waiting-backdrop')?.remove();
-      activateOnlineMode(m);
-    }
-  };
+  // NET.onRoomUpdate / onState are set ONCE globally below (not per lobby open)
 
   document.getElementById('lobby-create').addEventListener('click', async () => {
     setLobbyStatus('Connecting…');
@@ -407,6 +399,21 @@ function applyServerState(msg) {
   render();
 }
 
+// Global, permanent handlers (set once at boot). Do NOT override inside lobby code.
+NET.onRoomUpdate = (m) => {
+  console.log('[ui] ROOM_STATE', m.status, 'you=' + m.you);
+  try { localStorage.setItem('ng_name', (document.getElementById('lobby-name')?.value || 'Player')); } catch {}
+  if (m.status === 'WAITING') {
+    if (UI._setLobbyStatus) UI._setLobbyStatus(`Room created: ${m.code} — share this code!`, 'ok');
+    showWaitingForOpponent(m.code);
+  } else if (m.status === 'PLAYING') {
+    document.getElementById('lobby-backdrop')?.remove();
+    document.getElementById('waiting-backdrop')?.remove();
+    activateOnlineMode(m);
+  } else if (m.status === 'FINISHED') {
+    activateOnlineMode(m);
+  }
+};
 NET.onState = (m) => { applyServerState(m); };
 
 // ---------- Power Compendium modal ----------

@@ -65,24 +65,29 @@ function netSend(msg) {
 }
 
 function handleNetMessage(m) {
+  console.log('[net] <-', m.type, m);
   switch (m.type) {
     case 'ROOM_STATE':
       NET.myColor = m.you;
       NET.roomCode = m.code;
       if (m.sessionToken) NET.sessionToken = m.sessionToken;
+      // If the room is PLAYING, activate online mode exactly once (no double fire).
       if (NET.onRoomUpdate) NET.onRoomUpdate(m);
-      if (m.game && NET.onState) NET.onState(m);
+      // Only apply game state here when the room transitioned to PLAYING;
+      // otherwise onRoomUpdate handles the lobby/waiting UI.
+      if (m.status === 'PLAYING' && m.game && NET.onState) NET.onState(m);
       break;
     case 'GAME_STATE':
       if (NET.onState) NET.onState(m);
       break;
     case 'ERROR':
+      console.error('[net] server error:', m.message);
       if (NET.onError) NET.onError(new Error(m.message || 'Server error'));
       break;
     case 'PONG':
       break;
     default:
-      // ignore
+      console.warn('[net] unknown type:', m.type);
   }
 }
 
