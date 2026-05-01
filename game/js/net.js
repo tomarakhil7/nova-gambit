@@ -16,7 +16,8 @@ const NET = {
   onState: null,
   onError: null,
   onRoomUpdate: null,
-  onStatusChange: null       // optional: notify UI of 'connecting'|'connected'|'disconnected'
+  onStatusChange: null,      // optional: notify UI of 'connecting'|'connected'|'disconnected'
+  onRoomExpired: null        // optional: notify UI when server lost our room (e.g. redeploy)
 };
 
 function wsUrl() {
@@ -151,10 +152,27 @@ function handleNetMessage(m) {
     case 'GAME_STATE':
       if (NET.onState) NET.onState(m);
       break;
-    case 'ERROR':
-      console.error('[net] server error:', m.message);
+    case 'ERROR': {
+      console.error('[net] server error:', m.code, m.message);
+      // Terminal room errors: the server doesn't know this session / room anymore.
+      // Most commonly: server restarted (redeploy) or the room timed out.
+      // Stop reconnect loop and surface a clear "room expired" state.
+      const TERMINAL = new Set(['NO_ROOM', 'ROOM_NOT_FOUND', 'ROOM_GONE']);
+      if (TERMINAL.has(m.code)) {
+        if (NET.reconnectTimer) { clearTimeout(NET.reconnectTimer); NET.reconnectTimer = null; }
+        NET.reconnectAttempt = 0;
+        const hadSession = !!NET.sessionToken;
+        NET.mode = 'hotseat';
+        NET.myColor = null;
+        NET.roomCode = null;
+        NET.sessionToken = null;
+        try { if (NET.ws && NET.ws.readyState === 1) NET.ws.close(); } catch {}
+        if (NET.onRoomExpired) NET.onRoomExpired({ hadSession });
+        break;
+      }
       if (NET.onError) NET.onError(new Error(m.message || 'Server error'));
       break;
+    }
     case 'PONG':
       break;
     default:

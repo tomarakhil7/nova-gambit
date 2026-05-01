@@ -425,6 +425,31 @@ NET.onRoomUpdate = (m) => {
   }
 };
 NET.onState = (m) => { applyServerState(m); };
+NET.onRoomExpired = () => {
+  // Server no longer knows our room — most commonly after a redeploy.
+  // Drop back to hotseat, clear board, and show a modal the user can dismiss into lobby.
+  applyPerspective();
+  if (document.getElementById('room-expired-backdrop')) return;
+  const bd = document.createElement('div');
+  bd.id = 'room-expired-backdrop';
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal">
+      <h2>Room expired</h2>
+      <p>The server lost this room — usually because it was redeployed or the room timed out. Your current session can't continue.</p>
+      <div class="actions">
+        <button class="primary" id="re-lobby">Back to Lobby</button>
+        <button id="re-dismiss">Play Local</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bd);
+  bd.querySelector('#re-lobby').addEventListener('click', () => {
+    bd.remove();
+    openLobby();
+  });
+  bd.querySelector('#re-dismiss').addEventListener('click', () => bd.remove());
+  setStatus('Room expired — returned to local game', 'err');
+};
 NET.onStatusChange = (state) => {
   if (NET.mode !== 'online') return;
   if (state === 'connecting') setStatus('Reconnecting…', 'warn');
