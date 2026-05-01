@@ -365,17 +365,234 @@ function openAccountMenu() {
       <h2>Account</h2>
       <p>Signed in as <b>${AUTH.user.displayName}</b> · ${AUTH.user.email}</p>
       <div class="actions">
-        <button class="primary" id="acct-close">Close</button>
+        <button class="primary" id="acct-games">My Games</button>
+        <button id="acct-close">Close</button>
         <button id="acct-logout">Sign out</button>
       </div>
     </div>`;
   document.body.appendChild(bd);
+  bd.querySelector('#acct-games').addEventListener('click', () => { bd.remove(); openMyGames(); });
   bd.querySelector('#acct-close').addEventListener('click', () => bd.remove());
   bd.querySelector('#acct-logout').addEventListener('click', () => {
     authLogout();
     bd.remove();
     setStatus('Signed out', 'ok');
   });
+}
+
+// ---------- My Games list ----------
+async function openMyGames() {
+  if (document.getElementById('mygames-backdrop')) return;
+  if (!authIsLoggedIn()) { openAuthModal('login'); return; }
+  const bd = document.createElement('div');
+  bd.id = 'mygames-backdrop';
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal mygames-modal">
+      <h2>My Games</h2>
+      <div id="mygames-body" class="mygames-body">Loading…</div>
+      <div class="actions"><button id="mg-close">Close</button></div>
+    </div>`;
+  document.body.appendChild(bd);
+  bd.querySelector('#mg-close').addEventListener('click', () => bd.remove());
+
+  const body = bd.querySelector('#mygames-body');
+  const r = await apiFetch('/api/games');
+  if (!r.ok) { body.textContent = r.body.error || 'Failed to load games'; return; }
+  const list = r.body.games || [];
+  if (!list.length) { body.innerHTML = '<p class="mg-empty">No completed games yet. Finish a game to see it here.</p>'; return; }
+
+  body.innerHTML = list.map(g => {
+    const myId = AUTH.user.id;
+    const myColor = g.whiteUserId === myId ? 'White' : g.blackUserId === myId ? 'Black' : '—';
+    const resultLabel = g.result === 'DRAW' ? 'Draw' : g.result === 'WHITE' ? 'White wins' : 'Black wins';
+    const outcome = g.result === 'DRAW'
+      ? 'Draw'
+      : (g.result === 'WHITE' && myColor === 'White') || (g.result === 'BLACK' && myColor === 'Black')
+        ? 'Win' : 'Loss';
+    const when = new Date(g.endedAt).toLocaleString();
+    return `
+      <div class="mg-row" data-game-id="${g.id}">
+        <div class="mg-col mg-outcome mg-${outcome.toLowerCase()}">${outcome}</div>
+        <div class="mg-col mg-matchup">
+          <div class="mg-players">${escapeHtml(g.whiteName)} <span class="mg-vs">vs</span> ${escapeHtml(g.blackName)}</div>
+          <div class="mg-meta">${resultLabel} · ${g.winReason || ''} · ${g.timeMode}</div>
+        </div>
+        <div class="mg-col mg-when">${when}<br><span class="mg-color">You played ${myColor}</span></div>
+        <div class="mg-col mg-actions"><button class="primary mg-replay">Replay ▶</button></div>
+      </div>`;
+  }).join('');
+
+  body.querySelectorAll('.mg-row').forEach(row => {
+    row.querySelector('.mg-replay').addEventListener('click', async () => {
+      const id = row.dataset.gameId;
+      const rr = await apiFetch('/api/games/' + id);
+      if (!rr.ok) { alert(rr.body.error || 'Failed to load game'); return; }
+      bd.remove();
+      openReplay(rr.body.game);
+    });
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ---------- Replay viewer ----------
+// Reconstructs the game by re-applying actions on a fresh engine state and
+// snapshotting the state after each step. Users can scrub forward/back.
+function openReplay(game) {
+  if (document.getElementById('replay-backdrop')) return;
+  const actions = Array.isArray(game.actions) ? game.actions : [];
+  const snapshots = buildReplaySnapshots(actions);
+  // snapshots[0] is the initial position; snapshots[i] is state AFTER actions[i-1].
+
+  const bd = document.createElement('div');
+  bd.id = 'replay-backdrop';
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal replay-modal">
+      <h2>Replay · ${escapeHtml(game.whiteName)} vs ${escapeHtml(game.blackName)}</h2>
+      <div class="replay-meta">${game.result === 'DRAW' ? 'Draw' : (game.result === 'WHITE' ? 'White wins' : 'Black wins')} · ${game.winReason || ''} · ${game.timeMode}</div>
+      <div class="replay-stage">
+        <div id="replay-board" class="replay-board"></div>
+        <div class="replay-side">
+          <div id="replay-move-log" class="replay-move-log"></div>
+        </div>
+      </div>
+      <div class="replay-controls">
+        <button id="rp-start" title="Start">⏮</button>
+        <button id="rp-prev" title="Back">◀</button>
+        <span id="rp-pos" class="rp-pos">0 / ${actions.length}</span>
+        <button id="rp-next" title="Forward">▶</button>
+        <button id="rp-end" title="End">⏭</button>
+        <button id="rp-close" style="margin-left:auto;">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bd);
+
+  // Build 8×8 DOM grid for the replay board
+  const boardEl = bd.querySelector('#replay-board');
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const sq = document.createElement('div');
+      sq.className = 'rp-square ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
+      sq.dataset.r = r; sq.dataset.c = c;
+      boardEl.appendChild(sq);
+    }
+  }
+
+  let idx = 0;
+  const posEl = bd.querySelector('#rp-pos');
+  const moveLogEl = bd.querySelector('#replay-move-log');
+  function renderReplayAt(i) {
+    idx = Math.max(0, Math.min(snapshots.length - 1, i));
+    posEl.textContent = `${idx} / ${actions.length}`;
+    const snap = snapshots[idx];
+    // Paint board
+    boardEl.querySelectorAll('.rp-square').forEach(sq => {
+      sq.innerHTML = '';
+      sq.classList.remove('last-move');
+    });
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = snap.board[r][c];
+      if (!p) continue;
+      const sq = boardEl.querySelector(`.rp-square[data-r="${r}"][data-c="${c}"]`);
+      const el = document.createElement('div');
+      el.className = 'rp-piece ' + (p.color === 'w' ? 'white' : 'black');
+      el.textContent = PIECE_UNICODE[p.color + p.type];
+      sq.appendChild(el);
+    }
+    // Highlight last action
+    if (idx > 0) {
+      const lastAct = actions[idx - 1];
+      const from = lastAct.payload && (lastAct.payload.from || lastAct.payload.captor);
+      const to = lastAct.payload && (lastAct.payload.to || lastAct.payload.captive || lastAct.payload);
+      if (from && typeof from.r === 'number') boardEl.querySelector(`.rp-square[data-r="${from.r}"][data-c="${from.c}"]`)?.classList.add('last-move');
+      if (to && typeof to.r === 'number' && typeof to.c === 'number') boardEl.querySelector(`.rp-square[data-r="${to.r}"][data-c="${to.c}"]`)?.classList.add('last-move');
+    }
+    // Move log
+    moveLogEl.innerHTML = actions.map((a, i2) => {
+      const label = formatAction(a);
+      const cls = i2 === idx - 1 ? 'rp-move active' : 'rp-move';
+      return `<div class="${cls}" data-i="${i2}">${i2 + 1}. <b>${a.by === 'w' ? 'W' : 'B'}</b> ${escapeHtml(label)}</div>`;
+    }).join('');
+    moveLogEl.querySelectorAll('.rp-move').forEach(el => {
+      el.addEventListener('click', () => renderReplayAt(parseInt(el.dataset.i, 10) + 1));
+    });
+    const active = moveLogEl.querySelector('.rp-move.active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }
+
+  bd.querySelector('#rp-start').addEventListener('click', () => renderReplayAt(0));
+  bd.querySelector('#rp-prev').addEventListener('click', () => renderReplayAt(idx - 1));
+  bd.querySelector('#rp-next').addEventListener('click', () => renderReplayAt(idx + 1));
+  bd.querySelector('#rp-end').addEventListener('click', () => renderReplayAt(snapshots.length - 1));
+  bd.querySelector('#rp-close').addEventListener('click', () => bd.remove());
+
+  renderReplayAt(0);
+}
+
+// Re-apply each action against a fresh engine state, snapshotting after each step.
+// Silently skip any action that errors (e.g. if the stored log has a shape mismatch
+// after a future engine migration) — the viewer can still show partial progress.
+function buildReplaySnapshots(actions) {
+  const snaps = [];
+  const s = initGame();
+  snaps.push(snapshotReplayState(s));
+  for (const a of actions) {
+    try { applyReplayAction(s, a); }
+    catch (e) { console.warn('[replay] skipped', a, e.message); }
+    snaps.push(snapshotReplayState(s));
+  }
+  return snaps;
+}
+
+function snapshotReplayState(s) {
+  return {
+    board: s.board.map(row => row.map(p => p ? { type: p.type, color: p.color } : null)),
+    turn: s.turn,
+    turnNumber: s.turnNumber,
+    winner: s.winner || null
+  };
+}
+
+function applyReplayAction(s, a) {
+  const { type, payload } = a;
+  if (type === 'MOVE') return makeMove(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.promotion);
+  if (type === 'SACRIFICE') return sacrificePiece(s, payload.r, payload.c);
+  if (type === 'RESIGN') { s.winner = a.by === 'w' ? 'b' : 'w'; s.winReason = 'RESIGNATION'; return; }
+  if (type === 'POWER_CAST') {
+    const p = payload.power;
+    if (p === 'FROST') return castFrost(s, payload.r, payload.c);
+    if (p === 'FORTIFY') return castFortify(s, payload.r, payload.c);
+    if (p === 'BLINK') return castBlink(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c);
+    if (p === 'SPAWN') return castSpawn(s, payload.r, payload.c);
+    if (p === 'GHOST') return castGhostMove(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c);
+    if (p === 'BOMBA') return castBomba(s, payload.r, payload.c);
+    if (p === 'CHAIN_LIGHTNING') return castChainLightning(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.jump.r, payload.jump.c);
+    if (p === 'IMPRISON') return castImprison(s, payload.captor.r, payload.captor.c, payload.captive.r, payload.captive.c);
+    if (p === 'AETHER_BLOCK') return castAetherBlock(s);
+    if (p === 'PROMOTE') return castPromote(s, payload.r, payload.c, payload.newType);
+    if (p === 'CHRONOBREAK') return castChronobreak(s);
+    if (p === 'VENGEANCE') return castVengeance(s, payload.r, payload.c);
+    if (p === 'WALL') return castWall(s, payload.r, payload.c);
+  }
+}
+
+function formatAction(a) {
+  const p = a.payload || {};
+  if (a.type === 'MOVE') return `move ${algebraic(p.from.r, p.from.c)}→${algebraic(p.to.r, p.to.c)}${p.promotion ? '=' + p.promotion : ''}`;
+  if (a.type === 'SACRIFICE') return `sacrifice ${algebraic(p.r, p.c)}`;
+  if (a.type === 'RESIGN') return 'resign';
+  if (a.type === 'POWER_CAST') {
+    const base = (p.power || '').toLowerCase();
+    if (typeof p.r === 'number') return `${base} @ ${algebraic(p.r, p.c)}`;
+    if (p.from && p.to) return `${base} ${algebraic(p.from.r, p.from.c)}→${algebraic(p.to.r, p.to.c)}`;
+    if (p.captor) return `${base} ${algebraic(p.captor.r, p.captor.c)}⚡${algebraic(p.captive.r, p.captive.c)}`;
+    return base;
+  }
+  return a.type;
 }
 
 // ---------- Multiplayer Lobby ----------
