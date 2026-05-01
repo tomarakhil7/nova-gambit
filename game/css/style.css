@@ -2047,6 +2047,28 @@ button.primary {
 .lobby-status { font-size: 12px; padding: 8px 0; min-height: 20px; }
 .lobby-status.ok  { color: var(--aether); }
 .lobby-status.err { color: var(--fragile); }
+.lobby-status.warn { color: #ffb347; }
+
+/* Auth modal */
+.auth-modal { max-width: 400px; }
+.auth-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.auth-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-weight: 600;
+  border-bottom: 2px solid transparent;
+}
+.auth-tab.active { color: var(--aether); border-bottom-color: var(--aether); }
+.auth-tab:hover:not(.active) { color: #fff; }
 .room-code-display {
   font-family: 'JetBrains Mono', monospace;
   font-size: 36px;

@@ -266,6 +266,116 @@ function buildPowerPanel() {
   document.getElementById('open-codex').addEventListener('click', () => openCodex());
   document.getElementById('open-compendium').addEventListener('click', () => openCompendium());
   document.getElementById('open-lobby').addEventListener('click', () => openLobby());
+  document.getElementById('open-auth').addEventListener('click', () => {
+    if (authIsLoggedIn()) openAccountMenu();
+    else openAuthModal();
+  });
+  AUTH.onChange = renderAuthButton;
+  renderAuthButton();
+}
+
+function renderAuthButton() {
+  const btn = document.getElementById('open-auth');
+  if (!btn) return;
+  if (authIsLoggedIn()) {
+    btn.textContent = `👤 ${AUTH.user.displayName}`;
+    btn.title = 'Account menu';
+  } else {
+    btn.textContent = '👤 Sign in';
+    btn.title = 'Sign in / sign up';
+  }
+}
+
+function openAuthModal(defaultMode = 'login') {
+  if (document.getElementById('auth-backdrop')) return;
+  const bd = document.createElement('div');
+  bd.id = 'auth-backdrop';
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal auth-modal">
+      <h2 id="auth-title">Sign in</h2>
+      <div class="auth-tabs">
+        <button class="auth-tab" data-mode="login">Sign in</button>
+        <button class="auth-tab" data-mode="signup">Create account</button>
+      </div>
+      <div class="lobby-row">
+        <label>Email</label>
+        <input id="auth-email" type="email" autocomplete="email" maxlength="100">
+      </div>
+      <div class="lobby-row" id="auth-name-row" style="display:none;">
+        <label>Display name</label>
+        <input id="auth-name" type="text" maxlength="30" autocomplete="nickname">
+      </div>
+      <div class="lobby-row">
+        <label>Password</label>
+        <input id="auth-password" type="password" autocomplete="current-password" minlength="8" maxlength="100">
+      </div>
+      <div class="lobby-actions">
+        <button class="primary" id="auth-submit">Sign in</button>
+      </div>
+      <div class="lobby-status" id="auth-status"></div>
+      <div class="actions">
+        <button id="auth-cancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bd);
+
+  let mode = defaultMode;
+  const title = bd.querySelector('#auth-title');
+  const submit = bd.querySelector('#auth-submit');
+  const nameRow = bd.querySelector('#auth-name-row');
+  const statusEl = bd.querySelector('#auth-status');
+  const setAuthStatus = (msg, kind = 'ok') => { statusEl.textContent = msg; statusEl.className = 'lobby-status ' + kind; };
+
+  function setMode(m) {
+    mode = m;
+    bd.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === m));
+    if (m === 'signup') { title.textContent = 'Create account'; submit.textContent = 'Create account'; nameRow.style.display = ''; }
+    else { title.textContent = 'Sign in'; submit.textContent = 'Sign in'; nameRow.style.display = 'none'; }
+    setAuthStatus('');
+  }
+  bd.querySelectorAll('.auth-tab').forEach(t => t.addEventListener('click', () => setMode(t.dataset.mode)));
+  setMode(defaultMode);
+
+  submit.addEventListener('click', async () => {
+    const email = bd.querySelector('#auth-email').value.trim();
+    const password = bd.querySelector('#auth-password').value;
+    setAuthStatus('Please wait…');
+    let r;
+    if (mode === 'signup') {
+      const displayName = bd.querySelector('#auth-name').value.trim();
+      r = await authSignup(email, password, displayName);
+    } else {
+      r = await authLogin(email, password);
+    }
+    if (r.error) { setAuthStatus(r.error, 'err'); return; }
+    setAuthStatus(`Welcome, ${r.user.displayName}!`, 'ok');
+    setTimeout(() => bd.remove(), 400);
+  });
+  bd.querySelector('#auth-cancel').addEventListener('click', () => bd.remove());
+}
+
+function openAccountMenu() {
+  if (document.getElementById('account-backdrop')) return;
+  const bd = document.createElement('div');
+  bd.id = 'account-backdrop';
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal">
+      <h2>Account</h2>
+      <p>Signed in as <b>${AUTH.user.displayName}</b> · ${AUTH.user.email}</p>
+      <div class="actions">
+        <button class="primary" id="acct-close">Close</button>
+        <button id="acct-logout">Sign out</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bd);
+  bd.querySelector('#acct-close').addEventListener('click', () => bd.remove());
+  bd.querySelector('#acct-logout').addEventListener('click', () => {
+    authLogout();
+    bd.remove();
+    setStatus('Signed out', 'ok');
+  });
 }
 
 // ---------- Multiplayer Lobby ----------
@@ -280,7 +390,7 @@ function openLobby() {
       <p>Create a new room and share the code, or join an existing one.</p>
       <div class="lobby-row">
         <label>Your name</label>
-        <input id="lobby-name" type="text" maxlength="20" value="${(localStorage.getItem('ng_name') || 'Player').replace(/"/g,'')}">
+        <input id="lobby-name" type="text" maxlength="20" value="${((authIsLoggedIn() && AUTH.user.displayName) || localStorage.getItem('ng_name') || 'Player').replace(/"/g,'')}"${authIsLoggedIn() ? ' readonly title="Name comes from your account"' : ''}>
       </div>
       <div class="lobby-row">
         <label>Time control</label>

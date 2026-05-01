@@ -25,6 +25,7 @@ console.log('[boot] engine loaded, mana exports:', Object.keys(mana).slice(0, 5)
 
 console.log('[boot] loading db...');
 const db = require('./db');
+const auth = require('./auth');
 
 const PORT = process.env.PORT || 8765;
 const CLIENT_DIR = path.join(__dirname, '..', 'game');
@@ -52,16 +53,71 @@ const MIME = {
   '.ico':  'image/x-icon'
 };
 
+// Limit request body size for /api/* to 16KB — we never accept large payloads.
+const MAX_BODY_BYTES = 16 * 1024;
+
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) { reject(new Error('Body too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch { reject(new Error('Invalid JSON')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(body));
+}
+
+async function handleApi(req, res, urlPath) {
+  try {
+    if (req.method === 'POST' && urlPath === '/api/signup') {
+      const body = await readJsonBody(req);
+      const r = await auth.signup(body);
+      return sendJson(res, r.status, r.error ? { error: r.error } : r.body);
+    }
+    if (req.method === 'POST' && urlPath === '/api/login') {
+      const body = await readJsonBody(req);
+      const r = await auth.login(body);
+      return sendJson(res, r.status, r.error ? { error: r.error } : r.body);
+    }
+    if (req.method === 'GET' && urlPath === '/api/me') {
+      const token = auth.extractBearer(req);
+      const r = await auth.me(token);
+      return sendJson(res, r.status, r.error ? { error: r.error } : r.body);
+    }
+    return sendJson(res, 404, { error: 'Not found' });
+  } catch (e) {
+    console.error('[api] error', e);
+    return sendJson(res, 400, { error: e.message || 'Bad request' });
+  }
+}
+
 function serveStatic(req, res) {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, rooms: rooms.size, uptime: process.uptime() }));
+    res.end(JSON.stringify({
+      ok: true, rooms: rooms.size, uptime: process.uptime(),
+      db: db.isEnabled(), auth: auth.authEnabled()
+    }));
     return;
   }
-  let urlPath = req.url.split('?')[0];
-  if (urlPath === '/' || urlPath === '') urlPath = '/index.html';
+  const urlPath = req.url.split('?')[0];
+  if (urlPath.startsWith('/api/')) return handleApi(req, res, urlPath);
+
+  let staticPath = urlPath === '/' || urlPath === '' ? '/index.html' : urlPath;
   // Prevent path traversal
-  const safe = path.normalize(path.join(CLIENT_DIR, urlPath));
+  const safe = path.normalize(path.join(CLIENT_DIR, staticPath));
   if (!safe.startsWith(CLIENT_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.stat(safe, (err, stat) => {
     if (err || !stat.isFile()) { res.writeHead(404); return res.end('Not found'); }
