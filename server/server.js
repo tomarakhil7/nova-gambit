@@ -26,6 +26,7 @@ console.log('[boot] engine loaded, mana exports:', Object.keys(mana).slice(0, 5)
 console.log('[boot] loading db...');
 const db = require('./db');
 const auth = require('./auth');
+const games = require('./games');
 
 const PORT = process.env.PORT || 8765;
 const CLIENT_DIR = path.join(__dirname, '..', 'game');
@@ -95,6 +96,22 @@ async function handleApi(req, res, urlPath) {
       const token = auth.extractBearer(req);
       const r = await auth.me(token);
       return sendJson(res, r.status, r.error ? { error: r.error } : r.body);
+    }
+    if (req.method === 'GET' && urlPath === '/api/games') {
+      const token = auth.extractBearer(req);
+      const claims = auth.verifyToken(token);
+      if (!claims) return sendJson(res, 401, { error: 'Sign in to view games' });
+      const rows = await games.listGamesForUser(claims.sub);
+      return sendJson(res, 200, { games: rows });
+    }
+    if (req.method === 'GET' && /^\/api\/games\/\d+$/.test(urlPath)) {
+      const token = auth.extractBearer(req);
+      const claims = auth.verifyToken(token);
+      if (!claims) return sendJson(res, 401, { error: 'Sign in to view games' });
+      const id = parseInt(urlPath.split('/').pop(), 10);
+      const game = await games.getGameForUser(id, claims.sub);
+      if (!game) return sendJson(res, 404, { error: 'Game not found' });
+      return sendJson(res, 200, { game });
     }
     return sendJson(res, 404, { error: 'Not found' });
   } catch (e) {
@@ -227,6 +244,7 @@ function tickClock(room) {
     room.status = 'FINISHED';
     stopClock(room);
     sendGameState(room, { type: 'TIMEOUT' });
+    games.persistFinishedGame(room).catch(e => console.error('[games] persist error', e));
   }
 }
 function switchClockTo(room, color) {
@@ -307,27 +325,56 @@ function applyAction(room, color, action) {
     switchClockTo(room, s.turn);
   }
 
+  // Record successful actions for replay + persistence.
+  if (result && result.success) {
+    room.actionLog = room.actionLog || [];
+    room.actionLog.push({
+      by: color,
+      type, payload,
+      turnNumber: s.turnNumber,
+      at: Date.now()
+    });
+  }
+
   if (s.winner) {
     room.status = 'FINISHED';
     stopClock(room);
+    games.persistFinishedGame(room).catch(e => console.error('[games] persist error', e));
   }
 
   return result;
 }
 
 // ---------- Connection handlers ----------
+// Resolve an authenticated identity from an optional JWT supplied by the client.
+// Returns { userId, displayName } or null if unauthenticated / invalid.
+function identifyFromToken(token) {
+  if (!token) return null;
+  const claims = auth.verifyToken(token);
+  if (!claims) return null;
+  return { userId: claims.sub, displayName: claims.name || 'Player' };
+}
+
 function handleCreateRoom(ws, msg) {
   const code = generateRoomCode();
   const timeMode = TIME_CONTROLS[msg.timeMode] ? msg.timeMode : 'classical';
   const sessionToken = crypto.randomBytes(16).toString('hex');
-  const player = { ws, name: (msg.name || 'Player').slice(0, 20), color: 'w', sessionToken, connected: true };
+  const ident = identifyFromToken(msg.token);
+  const name = ident ? ident.displayName : (msg.name || 'Player');
+  const player = {
+    ws, name: name.slice(0, 30), color: 'w', sessionToken, connected: true,
+    userId: ident ? ident.userId : null
+  };
   const room = {
     code, timeMode, status: 'WAITING',
     players: { w: player, b: null },
     spectators: new Set(),
     state: null, clock: null,
     createdAt: Date.now(), lastActivity: Date.now(),
-    disconnectTimers: {}
+    disconnectTimers: {},
+    actionLog: [],
+    startedAt: null,
+    persisted: false
   };
   rooms.set(code, room);
   socketToPlayer.set(ws, { roomCode: code, color: 'w', sessionToken });
@@ -360,7 +407,12 @@ function handleJoinRoom(ws, msg) {
   // New join as Black (if empty) or spectator
   if (!room.players.b) {
     const sessionToken = crypto.randomBytes(16).toString('hex');
-    const player = { ws, name: (msg.name || 'Player').slice(0, 20), color: 'b', sessionToken, connected: true };
+    const ident = identifyFromToken(msg.token);
+    const name = ident ? ident.displayName : (msg.name || 'Player');
+    const player = {
+      ws, name: name.slice(0, 30), color: 'b', sessionToken, connected: true,
+      userId: ident ? ident.userId : null
+    };
     room.players.b = player;
     socketToPlayer.set(ws, { roomCode: code, color: 'b', sessionToken });
 
@@ -368,6 +420,7 @@ function handleJoinRoom(ws, msg) {
     room.state = mana.initGame();
     initClock(room);
     room.status = 'PLAYING';
+    room.startedAt = Date.now();
     if (room.clock.running) startClock(room);
 
     ws.send(JSON.stringify({ type: 'ROOM_STATE', you: 'b', code, status: 'PLAYING',
@@ -408,6 +461,7 @@ function handleLeaveRoom(ws) {
           room.status = 'FINISHED';
           stopClock(room);
           sendGameState(room, { type: 'ABANDON' });
+          games.persistFinishedGame(room).catch(e => console.error('[games] persist error', e));
         }
         delete room.disconnectTimers[info.color];
       }

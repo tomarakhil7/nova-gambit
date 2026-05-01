@@ -90,7 +90,8 @@ async function netReconnect() {
   if (NET.mode !== 'online' || !NET.roomCode || !NET.sessionToken) return;
   try {
     await netConnect();
-    netSend({ type: 'JOIN_ROOM', code: NET.roomCode, sessionToken: NET.sessionToken });
+    const token = (typeof AUTH !== 'undefined' && AUTH && AUTH.token) ? AUTH.token : undefined;
+    netSend({ type: 'JOIN_ROOM', code: NET.roomCode, sessionToken: NET.sessionToken, token });
   } catch (e) {
     // Will retry via the close handler that fires after failed connect.
     scheduleReconnect();
@@ -182,12 +183,14 @@ function handleNetMessage(m) {
 
 function netCreateRoom(name, timeMode) {
   NET.mode = 'online';
-  netSend({ type: 'CREATE_ROOM', name, timeMode });
+  const token = (typeof AUTH !== 'undefined' && AUTH && AUTH.token) ? AUTH.token : undefined;
+  netSend({ type: 'CREATE_ROOM', name, timeMode, token });
 }
 
 function netJoinRoom(code, name) {
   NET.mode = 'online';
-  netSend({ type: 'JOIN_ROOM', code: code.toUpperCase(), name });
+  const token = (typeof AUTH !== 'undefined' && AUTH && AUTH.token) ? AUTH.token : undefined;
+  netSend({ type: 'JOIN_ROOM', code: code.toUpperCase(), name, token });
 }
 
 function netLeave() {
