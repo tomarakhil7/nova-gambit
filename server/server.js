@@ -10,9 +10,14 @@ console.log('[boot] node', process.version, 'cwd', process.cwd());
 // the Railway service actually received them on this deploy.
 console.log('[env] DATABASE_URL present?', !!process.env.DATABASE_URL, 'length=', (process.env.DATABASE_URL || '').length);
 console.log('[env] JWT_SECRET    present?', !!process.env.JWT_SECRET,    'length=', (process.env.JWT_SECRET    || '').length);
+console.log('[env] SMOKE_TEST    =', process.env.SMOKE_TEST || '(unset)');
 console.log('[env] PORT          =', process.env.PORT || '(unset)');
 console.log('[env] railway svc   =', process.env.RAILWAY_SERVICE_NAME || '(unset)');
 console.log('[env] railway env   =', process.env.RAILWAY_ENVIRONMENT_NAME || '(unset)');
+// Dump every env var name (values redacted) starting with our expected prefixes
+// so we can see exactly what Railway is injecting.
+const interesting = Object.keys(process.env).filter(k => /^(DATABASE|PG|POSTGRES|JWT|RAILWAY|SMOKE)/i.test(k)).sort();
+console.log('[env] names visible :', interesting.join(', ') || '(none)');
 
 const http = require('http');
 const fs = require('fs');
