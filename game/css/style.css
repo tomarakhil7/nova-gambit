@@ -648,6 +648,28 @@ button.primary {
   letter-spacing: 1px;
 }
 
+/* --- Flipped board (Black player's perspective in online mode) --- */
+.board-wrap.flipped .board { transform: rotate(180deg); }
+.board-wrap.flipped .board .square > * { transform: rotate(180deg); }
+.board-wrap.flipped .piece:hover { transform: rotate(180deg) scale(1.08); }
+.board-wrap.flipped .board-labels-files { direction: rtl; }
+
+/* "You" badge on the player card */
+.player-card .you-badge {
+  display: none;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #0a1222;
+  background: linear-gradient(135deg, #4de4ff, #b479ff);
+  border-radius: 10px;
+  vertical-align: middle;
+}
+.player-card.is-you .you-badge { display: inline-block; }
+.player-card.is-you { box-shadow: 0 0 0 2px rgba(77,228,255,0.5), 0 0 24px rgba(180,121,255,0.25); }
+
 /* =============== Right panel: Powers =============== */
 .power-panel {
   display: flex;

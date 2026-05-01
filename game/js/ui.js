@@ -246,6 +246,8 @@ function buildPowerPanel() {
   document.getElementById('sacrifice-btn').addEventListener('click', () => toggleSacrificeMode());
   document.getElementById('new-game').addEventListener('click', () => {
     const mode = document.getElementById('time-mode').value;
+    // New local game → leave online mode if we were in it, reset perspective.
+    if (NET.mode === 'online') { try { netLeave(); } catch {} }
     UI.state = initGame();
     UI.selected = null; UI.activePower = null; UI.powerState = {};
     UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
@@ -253,6 +255,7 @@ function buildPowerPanel() {
     initClock(mode);
     startClock();
     setStatus('New game — White to move.', 'ok');
+    applyPerspective();
     render();
   });
 
@@ -364,6 +367,7 @@ function activateOnlineMode(roomState) {
   // Adjust clock & UI
   const myColorName = NET.myColor === 'w' ? 'White' : NET.myColor === 'b' ? 'Black' : 'Spectator';
   setStatus(`Connected as ${myColorName}. Room: ${NET.roomCode}`, 'ok');
+  applyPerspective();
   if (roomState.clock) {
     UI.clock.white = roomState.clock.white;
     UI.clock.black = roomState.clock.black;
@@ -777,6 +781,18 @@ function render() {
 
 function squareEl(r, c) {
   return document.querySelector(`.square[data-r="${r}"][data-c="${c}"]`);
+}
+
+// Apply Black-perspective flip + "YOU" badge based on NET state.
+function applyPerspective() {
+  const wrap = document.querySelector('.board-wrap');
+  const flip = NET.mode === 'online' && NET.myColor === 'b';
+  if (wrap) wrap.classList.toggle('flipped', flip);
+  const white = document.getElementById('player-white');
+  const black = document.getElementById('player-black');
+  const isOnline = NET.mode === 'online';
+  if (white) white.classList.toggle('is-you', isOnline && NET.myColor === 'w');
+  if (black) black.classList.toggle('is-you', isOnline && NET.myColor === 'b');
 }
 
 function renderPlayers() {
