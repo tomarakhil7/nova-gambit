@@ -968,9 +968,8 @@ function castWall(state, r, c) {
 
   pushHistory(state);
   for (const sq of spawnSquares) {
-    const p = makePiece(PIECE.PAWN, color);
-    p.hasMoved = true;
-    state.board[sq.r][sq.c] = p;
+    // Wall-spawned pawns follow normal pawn rules: a pawn on its home rank can double-step.
+    state.board[sq.r][sq.c] = makePiece(PIECE.PAWN, color);
   }
 
   if (isInCheck(state.board, color)) {

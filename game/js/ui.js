@@ -314,8 +314,8 @@ function openLobby() {
   };
   UI._setLobbyStatus = setLobbyStatus;
 
-  NET.onError = (e) => setLobbyStatus(e.message || 'Connection error', 'err');
-  // NET.onRoomUpdate / onState are set ONCE globally below (not per lobby open)
+  // NET.onError / onRoomUpdate / onState are set ONCE globally below (not per lobby open).
+  // Retained here only: UI._setLobbyStatus is already exposed so the global handler can use it.
 
   document.getElementById('lobby-create').addEventListener('click', async () => {
     setLobbyStatus('Connecting…');
@@ -400,6 +400,12 @@ function applyServerState(msg) {
 }
 
 // Global, permanent handlers (set once at boot). Do NOT override inside lobby code.
+NET.onError = (e) => {
+  const msg = (e && e.message) || 'Connection error';
+  // If lobby is open, show there; otherwise surface on the game status bar.
+  if (document.getElementById('lobby-status') && UI._setLobbyStatus) UI._setLobbyStatus(msg, 'err');
+  else setStatus(msg, 'err');
+};
 NET.onRoomUpdate = (m) => {
   console.log('[ui] ROOM_STATE', m.status, 'you=' + m.you);
   try { localStorage.setItem('ng_name', (document.getElementById('lobby-name')?.value || 'Player')); } catch {}
