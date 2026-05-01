@@ -27,7 +27,7 @@ const PORT = process.env.PORT || 8765;
 const CLIENT_DIR = path.join(__dirname, '..', 'game');
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
 const ROOM_CODE_LEN = 5;
-const DISCONNECT_GRACE_MS = 60_000;
+const DISCONNECT_GRACE_MS = 120_000;  // 2 minutes — absorb backgrounded-tab gaps
 const IDLE_ROOM_TTL_MS = 10 * 60_000;
 const RATE_LIMIT = { WINDOW_MS: 10_000, MAX: 30 };
 
@@ -378,6 +378,8 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 wss.on('connection', (ws) => {
   ws._rateBucket = { count: 0, reset: Date.now() + RATE_LIMIT.WINDOW_MS };
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
 
   ws.on('message', (raw) => {
     // Rate limit
@@ -416,6 +418,17 @@ wss.on('connection', (ws) => {
   ws.on('close', () => handleLeaveRoom(ws));
   ws.on('error', (e) => console.error('WS error:', e.message));
 });
+
+// WebSocket heartbeat: ping every 30s, terminate sockets that didn't pong back.
+// This lets us detect half-open connections (idle browser, flaky network) and
+// fire the close handler so the disconnect-grace timer can start.
+setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) { try { ws.terminate(); } catch {} return; }
+    ws.isAlive = false;
+    try { ws.ping(); } catch {}
+  });
+}, 30_000).unref?.();
 
 // Reap idle rooms
 setInterval(() => {

@@ -425,6 +425,12 @@ NET.onRoomUpdate = (m) => {
   }
 };
 NET.onState = (m) => { applyServerState(m); };
+NET.onStatusChange = (state) => {
+  if (NET.mode !== 'online') return;
+  if (state === 'connecting') setStatus('Reconnecting…', 'warn');
+  else if (state === 'connected') setStatus(`Connected as ${NET.myColor === 'w' ? 'White' : NET.myColor === 'b' ? 'Black' : 'Spectator'}. Room: ${NET.roomCode || ''}`, 'ok');
+  else if (state === 'disconnected') setStatus('Disconnected — attempting reconnect…', 'warn');
+};
 
 // ---------- Power Compendium modal ----------
 function openCompendium() {
