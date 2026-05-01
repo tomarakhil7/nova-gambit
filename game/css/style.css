@@ -84,9 +84,27 @@ body::before {
   display: grid;
   grid-template-columns: minmax(220px, 260px) 1fr minmax(240px, 280px);
   grid-template-rows: auto 1fr auto;
-  height: 100vh;
+  min-height: 100vh;    /* allow content to scroll the page rather than clip side panels */
   gap: 12px;
   padding: 12px;
+}
+
+/* On shorter laptop screens, collapse the 3-column layout to a single column
+   so nothing is clipped. Aether bars stay visible above the board. */
+@media (max-height: 820px), (max-width: 1100px) {
+  #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr auto;
+    min-height: auto;
+  }
+  .side-panel { overflow-y: visible; }
+  .side-panel.left,
+  .side-panel.right {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .board-wrap { min-width: 0; }
 }
 
 /* =============== Header =============== */

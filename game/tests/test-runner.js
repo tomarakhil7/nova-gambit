@@ -728,6 +728,26 @@ group('POWER: The Wall', () => {
 });
 
 // ============================================================
+// REGRESSION: Shielded attacker = mate (applyMoveRaw shield check)
+// Prior bug: applyMoveRaw used target.hasShield (legacy field) instead of
+// target.shieldHP, so the mate simulation let the defender "capture" the
+// shielded checker. isCheckmate returned false and the game didn't end.
+// ============================================================
+group('REGRESSION: shielded checker = mate', () => {
+  test('Fortified Queen on g7 mates Black King on h8', () => {
+    const s = customGame([
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['h1', PIECE.KING, COLOR.WHITE],
+      ['g7', PIECE.QUEEN, COLOR.WHITE, { shieldHP: 1 }]
+    ]);
+    s.turn = COLOR.BLACK;
+    assert(isInCheck(s.board, COLOR.BLACK), 'Black should be in check');
+    assert(isCheckmate(s.board, COLOR.BLACK, s), 'Should be checkmate — capturing shielded queen fizzles');
+    assertEq(allLegalMoves(s.board, COLOR.BLACK, s).length, 0);
+  });
+});
+
+// ============================================================
 // EDGE CASES
 // ============================================================
 group('EDGE: Bomba v3.2 — Kings and friendlies immune', () => {

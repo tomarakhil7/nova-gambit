@@ -388,11 +388,13 @@ function applyMoveRaw(board, fromR, fromC, move, gameState) {
   const piece = board[fromR][fromC];
   const target = board[move.r][move.c];
 
-  // FORTIFY: shielded piece capture fizzles (attacker still moves? NO - in our design,
-  // the capture FAILS and the attacker does NOT move. Shield blocks the attack entirely.)
-  if (target && target.hasShield && move.capture) {
-    target.hasShield = false; // shield breaks
-    // Attacker does NOT complete the move (capture fizzles)
+  // FORTIFY: shielded piece capture fizzles — attacker does NOT move, shield absorbs one hit.
+  // Note: legalMoves() invokes this through a snapshot/restore loop, so mutating shieldHP here
+  // is fine — the snapshot captures the pre-move state. The important invariant is that the
+  // board layout is unchanged by a would-be shield-blocked capture, so isInCheck() after the
+  // "move" correctly reflects that the mover's king still sees the original position.
+  if (target && target.shieldHP > 0 && move.capture) {
+    target.shieldHP -= 1;
     return { shieldBroke: true, captured: null };
   }
 
