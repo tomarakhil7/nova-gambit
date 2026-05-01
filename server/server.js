@@ -23,6 +23,9 @@ const engine = require(ENGINE_PATH);
 const mana = require(MANA_PATH);
 console.log('[boot] engine loaded, mana exports:', Object.keys(mana).slice(0, 5).join(','), '…');
 
+console.log('[boot] loading db...');
+const db = require('./db');
+
 const PORT = process.env.PORT || 8765;
 const CLIENT_DIR = path.join(__dirname, '..', 'game');
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
@@ -443,11 +446,17 @@ setInterval(() => {
 
 // Bind to 0.0.0.0 explicitly so cloud hosts (Railway, Fly, Render) can reach the process.
 const HOST = process.env.HOST || '0.0.0.0';
-server.listen(PORT, HOST, () => {
-  console.log(`✦ NOVA Gambit server listening on ${HOST}:${PORT}`);
-  console.log(`  Game:   http://${HOST}:${PORT}/`);
-  console.log(`  WS:     ws://${HOST}:${PORT}/ws`);
-  console.log(`  Health: http://${HOST}:${PORT}/health`);
+
+// Initialize DB before starting the HTTP server so migrations run first.
+// DB init failures do NOT block startup — the server runs in no-auth mode instead.
+db.init().then(() => {
+  server.listen(PORT, HOST, () => {
+    console.log(`✦ NOVA Gambit server listening on ${HOST}:${PORT}`);
+    console.log(`  Game:   http://${HOST}:${PORT}/`);
+    console.log(`  WS:     ws://${HOST}:${PORT}/ws`);
+    console.log(`  Health: http://${HOST}:${PORT}/health`);
+    console.log(`  DB:     ${db.isEnabled() ? 'connected' : 'disabled (DATABASE_URL not set)'}`);
+  });
 });
 
 // Surface unhandled errors so cloud logs show the real reason for a crash
