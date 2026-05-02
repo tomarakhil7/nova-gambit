@@ -80,129 +80,129 @@ function buildBoard() {
 
 const POWER_ICONS = {
   [POWER.FROST]: '❄', [POWER.FORTIFY]: '🛡', [POWER.BLINK]: '✦', [POWER.SPAWN]: '♙',
-  [POWER.GHOST]: '👁', [POWER.BOMBA]: '💣', [POWER.CHAIN_LIGHTNING]: '⚡',
-  [POWER.IMPRISON]: '⛓', [POWER.AETHER_BLOCK]: '⊘',
+  [POWER.BOMBA]: '💣', [POWER.DOUBLE_ATTACK]: '⚔',
+  [POWER.IMPRISON]: '⛓', [POWER.AETHER_BLOCK]: '⊘', [POWER.CLEANSE]: '✨',
   [POWER.PROMOTE]: '♛', [POWER.CHRONOBREAK]: '↺', [POWER.VENGEANCE]: '☠', [POWER.WALL]: '▧'
 };
 
-// Full power details for the Compendium (v3.2)
+// Full power details for the Compendium (v3.3)
 const POWER_DETAILS = {
   [POWER.FROST]: {
     targeting: 'Any enemy non-King piece',
     duration: '1 turn (target skips their next turn)',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Cannot target King, Spectral, captors, or an already-frozen piece. A frozen Rook/King blocks castling.',
-    useCase: 'Disable a defender before you invade. Freeze the castling Rook to kill opponent’s king safety.',
-    counter: 'Wait one turn, or move the piece away before Frost lands. Spend Aether quickly to not be caught idle.'
+    restrictions: 'Cannot target King, Spectral, captors, or an already-frozen piece. A frozen Rook blocks castling.',
+    useCase: 'Disable a defender before you invade. Freeze the castling Rook to kill king safety.',
+    counter: 'Move the piece away before Frost lands; or cast Cleanse (12 Aether) to thaw it instantly.'
   },
   [POWER.FORTIFY]: {
-    targeting: 'One of your own pieces',
+    targeting: 'One of your own pieces (not King)',
     duration: '1-hit shield · expires at end of your next turn if unused',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
     restrictions: 'Not usable on Spectral, captors, or already-shielded pieces. Cannot be stacked.',
-    useCase: 'Protect a Queen deep in enemy territory for one turn. Bait an attacker into wasting a move.',
-    counter: 'Hit the shield with a low-value piece (pawn) to break it; land the real threat next. Or wait one turn — it expires.'
+    useCase: 'Protect a Queen deep in enemy territory. Bait an attacker into wasting a move.',
+    counter: 'Hit the shield with a low-value piece to break it; or wait — it expires.'
   },
   [POWER.BLINK]: {
-    targeting: 'Your piece (not King) → empty square within a 3×3 grid',
+    targeting: 'Your piece (not King) → empty square within the 8 adjacent',
     duration: 'Instant',
     turnEnds: 'Yes',
-    canMate: 'No — engine rejects mate-delivering Blink',
-    restrictions: 'Range limited to the 8 adjacent squares. Cannot land into self-check. Voids castling rights for a moved Rook.',
-    useCase: 'Escape a one-square pin, reposition to an attack diagonal, defuse an adjacent Bomba.',
-    counter: 'Block all 8 adjacent squares of the target piece, or Frost it before it can Blink.'
+    canMate: 'No',
+    restrictions: 'Range = the 8 adjacent squares. Cannot leave King in check. Voids castling rights for a Blinked Rook.',
+    useCase: 'Escape a pin, re-deploy, defuse a Bomba by stepping onto it.',
+    counter: 'Frost the target before it Blinks. Surround the piece so no empty 3×3 squares remain.'
   },
   [POWER.SPAWN]: {
     targeting: 'Empty square in your half (ranks 1–4 from your side)',
-    duration: '1 turn cycle',
+    duration: 'Lasts 1 full turn cycle, vanishes at your next turn start',
     turnEnds: 'No — turn continues',
     canMate: 'Yes (if the Spectral Pawn delivers mate on spawn)',
-    restrictions: 'Spectral Pawn cannot move, be sacrificed for Aether (0 yield), perform en passant, or be targeted by other powers. Occupies a square (blocks castling path).',
-    useCase: 'Block an attack lane, give check, or plug a defensive hole for a turn.',
-    counter: 'Capture the Spectral Pawn, or simply wait — it vanishes on the caster’s next turn start.'
-  },
-  [POWER.GHOST]: {
-    targeting: 'Your piece → destination (phased for this move)',
-    duration: '1 move only',
-    turnEnds: 'Yes',
-    canMate: 'No — post-move mate check rejects the move',
-    restrictions: 'Cannot land on any King. Absolute pins are still respected (cannot expose own King).',
-    useCase: 'Bypass a wall of pawns or your own blockers to attack from an unexpected angle.',
-    counter: 'Guard the destination square with a defender. Ghost cannot mate, so no lethal surprises.'
+    restrictions: 'Spectral Pawn cannot move, be sacrificed, en passant, or targeted. Blocks castling paths.',
+    useCase: 'Block an attack lane or give check for a turn.',
+    counter: 'Capture the Spectral Pawn or wait it out.'
   },
   [POWER.BOMBA]: {
-    targeting: 'Empty square',
-    duration: '1 turn · detonates at start of your next turn',
-    turnEnds: 'No — turn continues (you still must move)',
+    targeting: 'Empty square on the row one ahead of your furthest pawn, or diagonal from one of your pawns',
+    duration: 'Detonates 1 turn later',
+    turnEnds: 'No — turn continues',
     canMate: 'N/A — Kings are immune to the blast',
-    restrictions: 'Only on empty squares. No stacking. Blast only destroys unshielded ENEMY non-Kings. Your own pieces, Kings, and shielded pieces are safe (shield absorbs 1 then breaks).',
-    useCase: 'Area-denial trap on a square an enemy piece wants to reach. Safely clear clustered unshielded enemies.',
-    counter: 'Move any piece onto the bomb to defuse it. Fortify a threatened enemy piece to absorb the blast.'
+    restrictions: 'Blast destroys unshielded ENEMY non-Kings only. Shielded pieces absorb one blast. Kings and your own pieces are safe.',
+    useCase: 'Clear pawn clusters; area-denial the square the enemy wants to occupy.',
+    counter: 'Step any piece onto the bomb to defuse it. Fortify a threatened piece.'
   },
-  [POWER.CHAIN_LIGHTNING]: {
-    targeting: 'Your piece → enemy (1st target) → adjacent enemy (2nd target)',
-    duration: 'Instant double capture; attacker lands on the 2nd target square',
+  [POWER.DOUBLE_ATTACK]: {
+    targeting: 'Your piece → 2 legal moves in sequence',
+    duration: 'Instant — both moves happen, attacker ends on the 2nd destination',
     turnEnds: 'Yes',
-    canMate: 'No — engine rejects',
-    restrictions: 'First must be a legal capture move. Second must be an enemy non-King adjacent to the first target. Shields absorb 1 hit and end the chain. Cannot leave your King in check (leapfrog-out-of-pin rejected).',
-    useCase: 'Two-for-one trade. Relocate a piece two squares via the 2nd target.',
-    counter: 'Spread pieces out so no two enemies are adjacent. Shield the stronger of the two to end the chain early.'
+    canMate: 'No',
+    restrictions: 'Both moves must be independently legal. Cannot target King. Cannot deliver mate. Shields fizzle captures normally.',
+    useCase: 'Two-for-one trades. Reposition a Knight deep for tempo.',
+    counter: 'Keep high-value pieces defended twice. Fortify the likely first target.'
   },
   [POWER.IMPRISON]: {
     targeting: 'Adjacent enemy non-King piece (captor = your piece)',
-    duration: 'Until captor dies (captive is released on nearest empty neighbor square)',
+    duration: 'Until the captor dies, is Cleansed, or the prisoner is otherwise freed',
     turnEnds: 'No — turn continues',
-    canMate: 'Captor can still give/deliver check from its square (via normal-move mate)',
-    restrictions: 'Captor cannot move, be Sacrificed, Fortified, Blinked, Ghosted, or targeted by Wall while holding. Cannot imprison Frozen, Spectral, or already-captor pieces (no nested cages).',
-    useCase: 'Permanently sideline an enemy Queen using a pawn. High-value trade if your captor is cheap.',
-    counter: 'Kill the captor — the captive is released on an adjacent empty square. Promoted form is preserved.'
+    canMate: 'Indirectly — captor still attacks as normal',
+    restrictions: 'Cannot imprison Frozen, Spectral, or already-captor pieces. Cannot imprison the King.',
+    useCase: 'Permanently sideline a Queen using a pawn. The captor can still move and attack.',
+    counter: 'Kill the captor — prisoner returns to its original starting square (destroyed if occupied). Or Cleanse to free it.'
   },
   [POWER.AETHER_BLOCK]: {
     targeting: 'Opponent (no board target)',
-    duration: 'Opponent’s next turn',
+    duration: "Opponent's next turn",
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Opponent still GAINS Aether (at turn end) but cannot SPEND it. Does NOT cancel already-active effects like ticking bombs or frozen pieces.',
-    useCase: 'Block a power combo right before it lands. Deny Vengeance at 20+ Aether.',
-    counter: 'Save Aether for the turn after — spending resumes. Stack extra Aether so one blocked turn doesn’t hurt.'
+    restrictions: 'Opponent gains Aether normally but cannot SPEND it. Active effects keep ticking.',
+    useCase: 'Break a combo right before it lands.',
+    counter: 'Save Aether; spending resumes next turn.'
+  },
+  [POWER.CLEANSE]: {
+    targeting: 'Any piece (yours or enemy) carrying Imprison or Frost',
+    duration: 'Instant',
+    turnEnds: 'No — turn continues',
+    canMate: 'N/A',
+    restrictions: 'Cannot target King. Must be cleansing something (piece must be frozen or a captor).',
+    useCase: 'Free a strong piece caught in an Imprison cage. Thaw a frozen Rook to castle again.',
+    counter: 'Re-apply the effect next turn. Aether Block the caster to deny Cleanse.'
   },
   [POWER.PROMOTE]: {
-    targeting: 'Any of your pawns (not Spectral), any rank',
+    targeting: 'Any of your pawns (not Spectral)',
     duration: 'Instant',
     turnEnds: 'Yes',
-    canMate: 'Yes (promotion-check to mate allowed)',
-    restrictions: 'Not usable on Spectral pawns. Must select a concrete type: Q / R / B / N.',
-    useCase: 'Skip the promotion race — make a Queen from a pawn on the 5th rank.',
-    counter: 'Aether Block the turn before. Frost the pawn to freeze it (does not prevent Promote since Promote doesn’t move; but watch Imprison).'
+    canMate: 'Yes — promotion-to-mate is allowed (delivers mate like any normal move)',
+    restrictions: 'Select a concrete type: Q / R / B / N.',
+    useCase: 'Skip the promotion race — Queen a pawn on the 5th rank for surprise.',
+    counter: 'Aether Block; Frost the pawn pre-emptively so promotion is wasted.'
   },
   [POWER.CHRONOBREAK]: {
-    targeting: 'No target (reverts board to pre-opponent-move state)',
+    targeting: 'No target (rewinds opponent\'s last move)',
     duration: 'Instant',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Cannot be cast on turn 1 (no prior opponent move). Cannot Chronobreak a Chronobreak. Opponent’s spent Aether is NOT refunded.',
-    useCase: 'Undo a catastrophic blunder. Restore an imprisoned captive. Bring back a defused Bomba.',
-    counter: 'Force the opponent to use it defensively before your real ultimate lands.'
+    restrictions: 'Cannot be cast on turn 1. Cannot Chronobreak a Chronobreak. Opponent keeps the Aether they spent.',
+    useCase: 'Undo a catastrophic blunder. Restore an imprisoned piece.',
+    counter: 'Force opponent to use it defensively before your ultimate lands.'
   },
   [POWER.VENGEANCE]: {
     targeting: 'Any enemy non-King piece on the board',
-    duration: 'Instant kill',
+    duration: 'Instant',
     turnEnds: 'Yes',
-    canMate: 'No — engine rejects',
-    restrictions: 'Bypasses the 1st shield (shield absorbs, piece still dies). Cannot target King. Cannot leave your King in check.',
-    useCase: 'Remove a defender far from your pieces, without moving. Skip material trades entirely.',
-    counter: 'Hard to counter directly — economy-starve them with Aether Block. Keep shielded defenders to burn the 1 shield.'
+    canMate: 'No',
+    restrictions: 'Bypasses the 1st shield (shield absorbs, piece still dies). Cannot target King. Cannot leave King in check.',
+    useCase: 'Remove a defender without moving.',
+    counter: 'Economy-starve with Aether Block; keep shielded defenders to burn the one shield.'
   },
   [POWER.WALL]: {
     targeting: 'Your piece (the anchor)',
     duration: 'Permanent pawns',
     turnEnds: 'Yes',
-    canMate: 'Yes — can force mate patterns. If Wall creates a STALEMATE, the player with more Aether wins (no draws).',
-    restrictions: 'New pawns skip last-rank squares (no auto-promotion). At least 1 empty adjacent square required. Cannot be used on imprisoned captor.',
-    useCase: 'Build an instant fortress around your King. Box in the enemy King for mate with Wall-pawn diagonals.',
-    counter: 'Capture the anchor piece; surrounding pawns stay. Break through the chain with a Knight or Ghost move.'
+    canMate: 'No — v3.3 blocks any Wall that would check or mate the enemy King',
+    restrictions: 'New pawns skip last-rank squares. At least 1 empty adjacent square required. Cannot put the enemy King in check.',
+    useCase: 'Build an instant fortress around your King. Cramp an enemy bishop.',
+    counter: 'Capture the anchor; Wall pawns themselves stay and remain targetable.'
   }
 };
 
@@ -212,8 +212,8 @@ function buildPowerPanel() {
   // All 13 powers in a single horizontal deck (no tier labels per UX request)
   const allPowers = [
     POWER.FROST, POWER.FORTIFY, POWER.BLINK, POWER.SPAWN,
-    POWER.GHOST, POWER.BOMBA, POWER.CHAIN_LIGHTNING, POWER.IMPRISON, POWER.AETHER_BLOCK,
-    POWER.PROMOTE, POWER.CHRONOBREAK, POWER.VENGEANCE, POWER.WALL
+    POWER.IMPRISON, POWER.AETHER_BLOCK, POWER.CLEANSE, POWER.BOMBA, POWER.DOUBLE_ATTACK,
+    POWER.PROMOTE, POWER.VENGEANCE, POWER.WALL, POWER.CHRONOBREAK
   ];
   for (const p of allPowers) {
     const tier = POWER_TIER[p];
@@ -499,9 +499,28 @@ function openReplay(game) {
       if (!p) continue;
       const sq = boardEl.querySelector(`.rp-square[data-r="${r}"][data-c="${c}"]`);
       const el = document.createElement('div');
-      el.className = 'rp-piece ' + (p.color === 'w' ? 'white' : 'black');
+      let classes = 'rp-piece ' + (p.color === 'w' ? 'white' : 'black');
+      if (p.isSpectral) classes += ' rp-spectral';
+      el.className = classes;
       el.textContent = PIECE_UNICODE[p.color + p.type];
       sq.appendChild(el);
+      if (p.shieldHP > 0) {
+        const s1 = document.createElement('div'); s1.className = 'rp-badge rp-shield'; s1.textContent = '🛡'; sq.appendChild(s1);
+      }
+      if (p.frozen) {
+        const f = document.createElement('div'); f.className = 'rp-badge rp-frost'; f.textContent = '❄'; sq.appendChild(f);
+      }
+      if (p.imprisoned) {
+        const i = document.createElement('div'); i.className = 'rp-badge rp-captor'; i.textContent = '⛓'; sq.appendChild(i);
+      }
+    }
+    // Bomb markers
+    for (const b of (snap.bombs || [])) {
+      const sq = boardEl.querySelector(`.rp-square[data-r="${b.r}"][data-c="${b.c}"]`);
+      if (!sq) continue;
+      const m = document.createElement('div'); m.className = 'rp-bomb';
+      m.textContent = '💣' + b.turnsLeft;
+      sq.appendChild(m);
     }
     // Highlight last action
     if (idx > 0) {
@@ -550,10 +569,18 @@ function buildReplaySnapshots(actions) {
 
 function snapshotReplayState(s) {
   return {
-    board: s.board.map(row => row.map(p => p ? { type: p.type, color: p.color } : null)),
+    board: s.board.map(row => row.map(p => p ? {
+      type: p.type,
+      color: p.color,
+      shieldHP: p.shieldHP || 0,
+      frozen: !!(p.frozenUntil && p.frozenUntil > s.turnNumber),
+      imprisoned: p.imprisoned ? { type: p.imprisoned.type, color: p.imprisoned.color } : null,
+      isSpectral: !!p.isSpectral
+    } : null)),
     turn: s.turn,
     turnNumber: s.turnNumber,
-    winner: s.winner || null
+    winner: s.winner || null,
+    bombs: (s.bombs || []).map(b => ({ r: b.r, c: b.c, owner: b.owner, turnsLeft: b.turnsLeft }))
   };
 }
 
@@ -568,11 +595,14 @@ function applyReplayAction(s, a) {
     if (p === 'FORTIFY') return castFortify(s, payload.r, payload.c);
     if (p === 'BLINK') return castBlink(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c);
     if (p === 'SPAWN') return castSpawn(s, payload.r, payload.c);
-    if (p === 'GHOST') return castGhostMove(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c);
     if (p === 'BOMBA') return castBomba(s, payload.r, payload.c);
-    if (p === 'CHAIN_LIGHTNING') return castChainLightning(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.jump.r, payload.jump.c);
+    if (p === 'DOUBLE_ATTACK') return castDoubleAttack(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.jump.r, payload.jump.c);
     if (p === 'IMPRISON') return castImprison(s, payload.captor.r, payload.captor.c, payload.captive.r, payload.captive.c);
     if (p === 'AETHER_BLOCK') return castAetherBlock(s);
+    if (p === 'CLEANSE') return castCleanse(s, payload.r, payload.c);
+    // Back-compat replay of older games
+    if (p === 'GHOST') return { error: 'Ghost action (legacy)' };
+    if (p === 'CHAIN_LIGHTNING') return castDoubleAttack(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.jump.r, payload.jump.c);
     if (p === 'PROMOTE') return castPromote(s, payload.r, payload.c, payload.newType);
     if (p === 'CHRONOBREAK') return castChronobreak(s);
     if (p === 'VENGEANCE') return castVengeance(s, payload.r, payload.c);
@@ -582,15 +612,29 @@ function applyReplayAction(s, a) {
 
 function formatAction(a) {
   const p = a.payload || {};
-  if (a.type === 'MOVE') return `move ${algebraic(p.from.r, p.from.c)}→${algebraic(p.to.r, p.to.c)}${p.promotion ? '=' + p.promotion : ''}`;
-  if (a.type === 'SACRIFICE') return `sacrifice ${algebraic(p.r, p.c)}`;
-  if (a.type === 'RESIGN') return 'resign';
+  if (a.type === 'MOVE') {
+    return `move ${algebraic(p.from.r, p.from.c)} → ${algebraic(p.to.r, p.to.c)}${p.promotion ? ' = ' + p.promotion : ''}`;
+  }
+  if (a.type === 'SACRIFICE') return `⚔ sacrifice ${algebraic(p.r, p.c)}`;
+  if (a.type === 'RESIGN') return 'resigned';
   if (a.type === 'POWER_CAST') {
-    const base = (p.power || '').toLowerCase();
-    if (typeof p.r === 'number') return `${base} @ ${algebraic(p.r, p.c)}`;
-    if (p.from && p.to) return `${base} ${algebraic(p.from.r, p.from.c)}→${algebraic(p.to.r, p.to.c)}`;
-    if (p.captor) return `${base} ${algebraic(p.captor.r, p.captor.c)}⚡${algebraic(p.captive.r, p.captive.c)}`;
-    return base;
+    const name = POWER_DISPLAY_NAMES[p.power] || (p.power || '').toLowerCase();
+    if (p.power === 'DOUBLE_ATTACK' && p.from && p.to && p.jump) {
+      return `⚔ ${name}: ${algebraic(p.from.r, p.from.c)} → ${algebraic(p.to.r, p.to.c)} → ${algebraic(p.jump.r, p.jump.c)}`;
+    }
+    if (p.power === 'IMPRISON' && p.captor && p.captive) {
+      return `⛓ ${name}: ${algebraic(p.captor.r, p.captor.c)} cages ${algebraic(p.captive.r, p.captive.c)}`;
+    }
+    if (p.power === 'BLINK' && p.from && p.to) {
+      return `✦ ${name}: ${algebraic(p.from.r, p.from.c)} → ${algebraic(p.to.r, p.to.c)}`;
+    }
+    if (p.power === 'PROMOTE' && typeof p.r === 'number') {
+      return `♛ ${name}: ${algebraic(p.r, p.c)} → ${p.newType || 'Q'}`;
+    }
+    if (p.power === 'AETHER_BLOCK') return `⊘ ${name}`;
+    if (p.power === 'CHRONOBREAK') return `↺ ${name}`;
+    if (typeof p.r === 'number') return `${POWER_ICONS[p.power] || ''} ${name} @ ${algebraic(p.r, p.c)}`.trim();
+    return name;
   }
   return a.type;
 }
@@ -792,8 +836,8 @@ function openCompendium() {
   backdrop.className = 'modal-backdrop compendium-backdrop';
   const allPowers = [
     POWER.FROST, POWER.FORTIFY, POWER.BLINK, POWER.SPAWN,
-    POWER.GHOST, POWER.BOMBA, POWER.CHAIN_LIGHTNING, POWER.IMPRISON, POWER.AETHER_BLOCK,
-    POWER.PROMOTE, POWER.CHRONOBREAK, POWER.VENGEANCE, POWER.WALL
+    POWER.IMPRISON, POWER.AETHER_BLOCK, POWER.CLEANSE, POWER.BOMBA, POWER.DOUBLE_ATTACK,
+    POWER.PROMOTE, POWER.VENGEANCE, POWER.WALL, POWER.CHRONOBREAK
   ];
 
   // Build comparison table
@@ -902,8 +946,8 @@ function openCodex() {
   backdrop.className = 'modal-backdrop codex-backdrop';
   const allPowers = [
     POWER.FROST, POWER.FORTIFY, POWER.BLINK, POWER.SPAWN,
-    POWER.GHOST, POWER.BOMBA, POWER.CHAIN_LIGHTNING, POWER.IMPRISON, POWER.AETHER_BLOCK,
-    POWER.PROMOTE, POWER.CHRONOBREAK, POWER.VENGEANCE, POWER.WALL
+    POWER.IMPRISON, POWER.AETHER_BLOCK, POWER.CLEANSE, POWER.BOMBA, POWER.DOUBLE_ATTACK,
+    POWER.PROMOTE, POWER.VENGEANCE, POWER.WALL, POWER.CHRONOBREAK
   ];
 
   let gridHtml = '';
@@ -953,7 +997,9 @@ function openCodex() {
   backdrop.querySelectorAll('.codex-card').forEach(card => {
     card.addEventListener('click', () => {
       const p = card.dataset.power;
-      if (!canAfford(UI.state, UI.state.turn, p)) {
+      const myColor = (NET.mode === 'online' && (NET.myColor === 'w' || NET.myColor === 'b'))
+        ? NET.myColor : UI.state.turn;
+      if (!canAfford(UI.state, myColor, p)) {
         card.classList.add('codex-shake');
         setTimeout(() => card.classList.remove('codex-shake'), 500);
         return;
@@ -1180,23 +1226,31 @@ function setAetherBar(id, val, prevVal) {
 }
 
 function renderPowerButtons() {
-  const color = UI.state.turn;
-  const blocked = UI.state.aetherBlocked[color];
+  // v3.3: each player sees affordability based on THEIR OWN aether, regardless of whose turn it is.
+  // Online: myColor from NET. Local hotseat: use current state.turn (same as before).
+  const myColor = (NET.mode === 'online' && (NET.myColor === 'w' || NET.myColor === 'b'))
+    ? NET.myColor
+    : UI.state.turn;
+  const myBlocked = UI.state.aetherBlocked[myColor];
+  const isMyTurnNow = (NET.mode !== 'online') || (NET.myColor === UI.state.turn);
+
   document.querySelectorAll('#power-cards .power-card').forEach(btn => {
     const p = btn.dataset.power;
-    const afford = canAfford(UI.state, color, p);
-    const locked = !afford || !!UI.state.winner;
+    const afford = canAfford(UI.state, myColor, p);
+    const locked = !afford || !!UI.state.winner || !isMyTurnNow;
     btn.classList.toggle('disabled', locked);
-    // Do NOT use native `disabled` — it blocks mouseenter/mouseleave (kills tooltips).
     btn.disabled = false;
     btn.classList.toggle('active', UI.activePower === p);
   });
+
   const sacBtn = document.getElementById('sacrifice-btn');
-  const alreadySac = UI.state.sacrificedThisTurn && UI.state.sacrificedThisTurn[color];
+  const alreadySac = UI.state.sacrificedThisTurn && UI.state.sacrificedThisTurn[myColor];
   sacBtn.classList.toggle('active', UI.activePower === 'SACRIFICE');
-  sacBtn.disabled = !!UI.state.winner || alreadySac || blocked;
-  sacBtn.classList.toggle('disabled', !!UI.state.winner || alreadySac || blocked);
-  if (blocked) sacBtn.title = 'Aether Block active';
+  const sacLocked = !!UI.state.winner || alreadySac || myBlocked || !isMyTurnNow;
+  sacBtn.disabled = sacLocked;
+  sacBtn.classList.toggle('disabled', sacLocked);
+  if (!isMyTurnNow) sacBtn.title = "Waiting for opponent's move";
+  else if (myBlocked) sacBtn.title = 'Aether Block active';
   else if (alreadySac) sacBtn.title = 'Already sacrificed this turn';
   else sacBtn.title = 'Sacrifice a non-King piece for Aether (1/turn)';
 }
@@ -1298,10 +1352,18 @@ function togglePower(p) {
   if (UI.activePower === p) { UI.activePower = null; UI.powerState = {}; }
   else {
     if (UI.state.winner) return;
-    if (!canAfford(UI.state, UI.state.turn, p)) {
+    // v3.3: check affordability against MY aether, not current turn's.
+    const myColor = (NET.mode === 'online' && (NET.myColor === 'w' || NET.myColor === 'b'))
+      ? NET.myColor : UI.state.turn;
+    if (!canAfford(UI.state, myColor, p)) {
       const cost = POWER_COSTS[p];
-      const have = UI.state.mana[UI.state.turn];
+      const have = UI.state.mana[myColor];
       setStatus(`${POWER_DISPLAY_NAMES[p]} needs ${cost} Aether · you have ${have}`, 'err');
+      return;
+    }
+    // Also: in online mode, you can stage a cast only when it's your turn.
+    if (NET.mode === 'online' && NET.myColor !== UI.state.turn) {
+      setStatus("Wait for your turn to cast.", 'warn');
       return;
     }
     UI.activePower = p; UI.powerState = {};
@@ -1447,23 +1509,17 @@ function handlePowerClick(r, c) {
     render(); return;
   }
 
-  if (p === POWER.GHOST) {
-    if (!UI.powerState.src) {
-      const piece = UI.state.board[r][c];
-      if (!piece || piece.color !== UI.state.turn) { setStatus('Select your piece.', 'warn'); return; }
-      UI.powerState.src = { r, c };
-      setStatus('Select ghost-move destination.', 'ok'); render(); return;
+  if (p === POWER.CLEANSE) {
+    if (netInterceptPower('CLEANSE', { r, c })) return;
+    const res = castCleanse(UI.state, r, c);
+    if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; render(); return; }
+    setStatus('Cleanse!', 'ok');
+    playVfx('fortify', r, c);  // reuse shield VFX for now
+    if (res.released) {
+      if (res.released.placed) setStatus(`Cleanse: prisoner returned to ${algebraic(res.released.r, res.released.c)}.`, 'ok');
+      else setStatus('Cleanse: prisoner destroyed — home tile was occupied.', 'warn');
     }
-    if (netInterceptPower('GHOST', { from: UI.powerState.src, to: { r, c } })) return;
-    pauseClockForAnimation(1200);
-    const res = castGhostMove(UI.state, UI.powerState.src.r, UI.powerState.src.c, r, c);
-    if (res.error) { setStatus(res.error, 'err'); UI.powerState = {}; render(); return; }
-    setStatus('Ghost!', 'ok');
-    playVfx('ghost', UI.powerState.src.r, UI.powerState.src.c);
-    playVfx('ghost', r, c);
-    UI.activePower = null; UI.powerState = {};
-    if (!UI.state.winner) switchClockTo(UI.state.turn);
-    render(); return;
+    UI.activePower = null; render(); return;
   }
 
   if (p === POWER.IMPRISON) {
@@ -1482,19 +1538,20 @@ function handlePowerClick(r, c) {
     render(); return;
   }
 
-  if (p === POWER.CHAIN_LIGHTNING) {
+  if (p === POWER.DOUBLE_ATTACK) {
     if (!UI.powerState.attacker) {
       const piece = UI.state.board[r][c];
-      if (!piece || piece.color !== UI.state.turn) { setStatus('Select attacker.', 'warn'); return; }
+      if (!piece || piece.color !== UI.state.turn) { setStatus('Select attacker (your piece, not King).', 'warn'); return; }
+      if (piece.type === PIECE.KING) { setStatus('Double Attack cannot target the King.', 'err'); return; }
       UI.powerState.attacker = { r, c };
-      setStatus('Select first capture target.', 'ok'); render(); return;
+      setStatus('Select the FIRST destination (any legal move for this piece).', 'ok'); render(); return;
     }
     if (!UI.powerState.first) {
       UI.powerState.first = { r, c };
-      setStatus('Select second target (adjacent to first).', 'ok'); render(); return;
+      setStatus('Select the SECOND destination (legal from the first landing).', 'ok'); render(); return;
     }
     const a = UI.powerState.attacker, f = UI.powerState.first;
-    if (netInterceptPower('CHAIN_LIGHTNING', { from: a, to: f, jump: { r, c } })) return;
+    if (netInterceptPower('DOUBLE_ATTACK', { from: a, to: f, jump: { r, c } })) return;
     pauseClockForAnimation(1400);
     const res = castChainLightning(UI.state, a.r, a.c, f.r, f.c, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.powerState = {}; render(); return; }
@@ -1603,7 +1660,7 @@ function computePowerTargets() {
         }
       }
     }
-  } else if (p === POWER.CHAIN_LIGHTNING) {
+  } else if (p === POWER.DOUBLE_ATTACK) {
     if (!UI.powerState.attacker) {
       for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
         const piece = UI.state.board[r][c];
@@ -1841,6 +1898,7 @@ function showPieceTooltip(ev, piece, r, c) {
   if (piece.imprisoned) {
     mods.push(`<span class="mod captor">⛓ Holding ${piece.imprisoned.type} (${piece.imprisoned.color==='w'?'W':'B'})</span>`);
   }
+  const sacVal = (piece.type !== PIECE.KING && !piece.isSpectral) ? SACRIFICE_VALUES[piece.type] : null;
   const tip = document.createElement('div');
   tip.id = 'piece-tooltip';
   tip.className = 'piece-tooltip';
@@ -1851,6 +1909,7 @@ function showPieceTooltip(ev, piece, r, c) {
       <span class="pt-sq">${algebraic(r,c)}</span>
     </div>
     ${mods.length ? `<div class="pt-mods">${mods.join('')}</div>` : '<div class="pt-mods pt-normal">No active effects</div>'}
+    ${sacVal != null ? `<div class="pt-sac">⚔ Sacrifice value: <b>+${sacVal}</b> Aether</div>` : ''}
   `;
   document.body.appendChild(tip);
   const rect = ev.target.closest('.square').getBoundingClientRect();
