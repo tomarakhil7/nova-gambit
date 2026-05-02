@@ -11,48 +11,46 @@ if (typeof module !== 'undefined' && module.exports && typeof PIECE === 'undefin
 }
 
 const POWER = {
-  // Tier 1 (Start Game: 4-7)
+  // Tier 1 — cheap utility
   FROST: 'FROST',
   FORTIFY: 'FORTIFY',
-  BLINK: 'BLINK',
   SPAWN: 'SPAWN',
-  // Tier 2 (Mid Game: 8-13)
-  GHOST: 'GHOST',
-  BOMBA: 'BOMBA',
-  CHAIN_LIGHTNING: 'CHAIN_LIGHTNING',
+  BLINK: 'BLINK',
+  // Tier 2 — mid-cost tactical
   IMPRISON: 'IMPRISON',
   AETHER_BLOCK: 'AETHER_BLOCK',
-  // Tier 3 (End Game: 14-30)
+  CLEANSE: 'CLEANSE',
+  BOMBA: 'BOMBA',
+  DOUBLE_ATTACK: 'DOUBLE_ATTACK',
+  // Tier 3 — expensive finishers
   PROMOTE: 'PROMOTE',
-  CHRONOBREAK: 'CHRONOBREAK',
   VENGEANCE: 'VENGEANCE',
-  WALL: 'WALL'
+  WALL: 'WALL',
+  CHRONOBREAK: 'CHRONOBREAK'
 };
 
 const POWER_TIER = {
   [POWER.FROST]: 1, [POWER.FORTIFY]: 1, [POWER.BLINK]: 1, [POWER.SPAWN]: 1,
-  [POWER.GHOST]: 2, [POWER.BOMBA]: 2, [POWER.CHAIN_LIGHTNING]: 2,
-  [POWER.IMPRISON]: 2, [POWER.AETHER_BLOCK]: 2,
-  [POWER.PROMOTE]: 3, [POWER.CHRONOBREAK]: 3, [POWER.VENGEANCE]: 3, [POWER.WALL]: 3
+  [POWER.IMPRISON]: 2, [POWER.AETHER_BLOCK]: 2, [POWER.CLEANSE]: 2,
+  [POWER.BOMBA]: 2, [POWER.DOUBLE_ATTACK]: 2,
+  [POWER.PROMOTE]: 3, [POWER.VENGEANCE]: 3, [POWER.WALL]: 3, [POWER.CHRONOBREAK]: 3
 };
 
+// v3.3 cost rebalance — user-provided values.
 const POWER_COSTS = {
-  // Tier 1 · Start Game (4-7)
-  [POWER.FROST]: 4,
-  [POWER.SPAWN]: 4,
-  [POWER.FORTIFY]: 5,
-  [POWER.BLINK]: 6,
-  // Tier 2 · Mid Game (6-13) — Ghost intentionally cheap per v3.2
-  [POWER.GHOST]: 6,
-  [POWER.BOMBA]: 10,
-  [POWER.CHAIN_LIGHTNING]: 11,
-  [POWER.IMPRISON]: 12,
-  [POWER.AETHER_BLOCK]: 13,
-  // Tier 3 · End Game (18-20)
-  [POWER.CHRONOBREAK]: 18,
-  [POWER.PROMOTE]: 18,
-  [POWER.VENGEANCE]: 20,
-  [POWER.WALL]: 20
+  [POWER.SPAWN]: 6,
+  [POWER.FROST]: 7,
+  [POWER.FORTIFY]: 7,
+  [POWER.BLINK]: 8,
+  [POWER.IMPRISON]: 10,
+  [POWER.AETHER_BLOCK]: 10,
+  [POWER.CLEANSE]: 12,
+  [POWER.BOMBA]: 14,
+  [POWER.DOUBLE_ATTACK]: 14,
+  [POWER.PROMOTE]: 15,
+  [POWER.VENGEANCE]: 18,
+  [POWER.WALL]: 18,
+  [POWER.CHRONOBREAK]: 20
 };
 
 const POWER_DISPLAY_NAMES = {
@@ -60,11 +58,11 @@ const POWER_DISPLAY_NAMES = {
   [POWER.FORTIFY]: 'Fortify',
   [POWER.BLINK]: 'Blink',
   [POWER.SPAWN]: 'Spawn',
-  [POWER.GHOST]: 'Ghost',
   [POWER.BOMBA]: 'Bomba',
-  [POWER.CHAIN_LIGHTNING]: 'Chain Lightning',
+  [POWER.DOUBLE_ATTACK]: 'Double Attack',
   [POWER.IMPRISON]: 'Imprison',
   [POWER.AETHER_BLOCK]: 'Aether Block',
+  [POWER.CLEANSE]: 'Cleanse',
   [POWER.PROMOTE]: 'Promote',
   [POWER.CHRONOBREAK]: 'Chronobreak',
   [POWER.VENGEANCE]: 'Vengeance',
@@ -76,15 +74,15 @@ const POWER_DESCRIPTIONS = {
   [POWER.FORTIFY]: 'Grant a 1-hit shield to your piece. Shield absorbs the next capture attempt (attacker does NOT land), then breaks. Shield expires at end of your next turn if unused. Turn continues.',
   [POWER.BLINK]: 'Teleport one of your pieces (not King) to any empty square within a 3×3 grid (the 8 adjacent squares). Turn ends. Cannot deliver checkmate.',
   [POWER.SPAWN]: 'Summon a Spectral Pawn on an empty square in your half (ranks 1–4). It cannot move or be sacrificed and vanishes on your next turn. Turn continues.',
-  [POWER.GHOST]: 'Move your piece through other pieces for 1 turn. Respects pins. Cannot land on a King. Turn ends. Cannot deliver checkmate.',
-  [POWER.BOMBA]: 'Plant a bomb on an empty square. Detonates next turn — destroys unshielded ENEMY non-King pieces in the 3×3 blast. Your pieces, Kings, and shielded pieces are safe. Shields absorb 1 blast then break. Defusable by moving onto the bomb square. Turn continues.',
-  [POWER.CHAIN_LIGHTNING]: 'Capture an enemy piece, then teleport onto an adjacent enemy piece to capture it too. Attacker ends on the 2nd target square. Cannot leave your King in check. Cannot deliver mate. Shields absorb 1 hit and end the chain. Turn ends.',
-  [POWER.IMPRISON]: 'Capture an adjacent enemy non-King piece INSIDE your piece. Captive is released (promoted form preserved) when your captor dies. Captor cannot move while holding. Cannot imprison frozen/Spectral/nested pieces. Turn continues.',
-  [POWER.AETHER_BLOCK]: "Silence your opponent — they cannot spend Aether on their next turn. Active effects still tick. Turn continues.",
+  [POWER.BOMBA]: 'Plant a bomb on an empty square one rank ahead of your furthest-advanced pawn. Pawns may also plant diagonally on empty squares. Detonates next turn — destroys unshielded ENEMY non-King pieces in the 3×3 blast. Kings, shielded pieces, and your own pieces are safe. Shields absorb one blast. Defused if a piece moves onto the bomb square. Turn continues.',
+  [POWER.DOUBLE_ATTACK]: 'Choose one of your pieces and make TWO moves with it this turn (the second from the square the first lands on). Each step must be fully legal. Cannot target the King. Cannot deliver checkmate. Turn ends.',
+  [POWER.IMPRISON]: 'Capture an adjacent enemy non-King piece INSIDE your piece. Captor can still move normally. Cannot imprison frozen, Spectral, or already-captor pieces. Turn continues.',
+  [POWER.AETHER_BLOCK]: 'Silence your opponent — they cannot spend Aether on their next turn. Active effects still tick. Turn continues.',
+  [POWER.CLEANSE]: 'Remove Imprisonment and/or Frost from any piece (yours or theirs). Releases any prisoner inside — the prisoner returns to its original starting square; if occupied, the prisoner is destroyed. Turn continues.',
   [POWER.PROMOTE]: 'Instantly promote any of your pawns to Queen, Rook, Bishop, or Knight (not Spectral). Turn ends.',
   [POWER.CHRONOBREAK]: "Undo opponent's last move. Their spent Aether is NOT refunded. Cannot Chronobreak a Chronobreak. Turn continues.",
-  [POWER.VENGEANCE]: 'Destroy any 1 enemy non-King piece anywhere on the board. Bypasses shield (absorbs 1 then kills). Cannot leave your King in check. Cannot deliver checkmate. Turn ends.',
-  [POWER.WALL]: 'Spawn friendly pawns on every empty adjacent square around one of your pieces (up to 8). Skips promotion squares. If Wall creates a stalemate, the player with more Aether wins (no draw). Turn ends.'
+  [POWER.VENGEANCE]: 'Destroy any 1 enemy non-King piece anywhere on the board. Bypasses shield (shield absorbs 1 then piece dies). Cannot leave your King in check. Cannot deliver checkmate. Turn ends.',
+  [POWER.WALL]: 'Spawn friendly pawns on every empty adjacent square around one of your pieces (up to 8). Skips last-rank squares. Cannot be cast if the spawned pawns would give check or mate to the enemy King. Turn ends.'
 };
 
 const SACRIFICE_VALUES = {
@@ -283,6 +281,251 @@ function generateAetherForPlayer(state, color) {
 
 function colorName(c) { return c === COLOR.WHITE ? 'White' : 'Black'; }
 
+// ---------- Power-aware mate detection (v3.3) ----------
+// Returns true if `color` (currently in check with no regular legal move) could cast some
+// affordable single power to get OUT of check. 1-ply search over the power space.
+function canOpponentEscapeMateWithPowers(state, color) {
+  if (state.aetherBlocked[color]) return false;  // opponent is silenced; can't cast anything
+  const aether = state.mana[color];
+  const snap = snapshot(state.board);
+  const snapMana = { ...state.mana };
+  const snapBombs = state.bombs.map(b => ({ ...b }));
+
+  const tryPower = (fn) => {
+    try { return !!fn(); }
+    finally {
+      // Always restore: deep-reset board + mana + bombs so the outer call is unaffected.
+      restore(state.board, snap);
+      state.mana = { ...snapMana };
+      state.bombs = snapBombs.map(b => ({ ...b }));
+      state.timeBombs = state.bombs;
+    }
+  };
+
+  // Helper to test: did the cast leave `color` NOT in check?
+  const escaped = () => !isInCheck(state.board, color);
+
+  // Save turn so we can swap while casting (most cast functions read state.turn).
+  const savedTurn = state.turn;
+  state.turn = color;
+
+  let saved = false;
+  try {
+    // --- Fortify (shield blocking a checker's attack after the checker tries to capture)
+    // Fortify on the King itself is actually illegal target in castFortify, but Fortify on
+    // a defender or blocker can indirectly save. Simplest: we try to cast Fortify on every
+    // friendly piece. If any attempt succeeds and then removes check (it won't remove check
+    // directly, but shield blocks upcoming capture — not "immediate escape" though).
+    // Fortify doesn't resolve a current-board check. Skip.
+
+    // --- Blink: move a friendly piece (including King? castBlink refuses King). So Blink
+    // won't move the King out of check. But Blink could move a BLOCKING piece away... no,
+    // that won't escape check either. Blink could move a defender to block a check line.
+    // Cost is 8 — try every Blink from every friendly piece to every empty 3×3 square.
+    if (aether >= POWER_COSTS[POWER.BLINK]) {
+      for (let r = 0; r < 8 && !saved; r++) for (let c = 0; c < 8 && !saved; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color !== color || p.type === PIECE.KING) continue;
+        for (let dr = -1; dr <= 1 && !saved; dr++) for (let dc = -1; dc <= 1 && !saved; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          const nr = r + dr, nc = c + dc;
+          if (!inBounds(nr, nc)) continue;
+          saved = tryPower(() => {
+            const res = castBlink(state, r, c, nr, nc);
+            return res && res.success && escaped();
+          });
+        }
+      }
+    }
+
+    // --- Vengeance: destroy a checker. Bypass shield. Cost 18.
+    if (!saved && aether >= POWER_COSTS[POWER.VENGEANCE]) {
+      for (let r = 0; r < 8 && !saved; r++) for (let c = 0; c < 8 && !saved; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color === color || p.type === PIECE.KING) continue;
+        saved = tryPower(() => {
+          const res = castVengeance(state, r, c);
+          return res && res.success && escaped();
+        });
+      }
+    }
+
+    // --- Cleanse: un-freeze a friendly blocker (if frozen) so it can legally move next turn.
+    //    BUT — this doesn't immediately resolve the current check. Skip.
+
+    // --- Imprison: imprison the adjacent checker. Cost 10.
+    if (!saved && aether >= POWER_COSTS[POWER.IMPRISON]) {
+      for (let r = 0; r < 8 && !saved; r++) for (let c = 0; c < 8 && !saved; c++) {
+        const captor = state.board[r][c];
+        if (!captor || captor.color !== color) continue;
+        for (let dr = -1; dr <= 1 && !saved; dr++) for (let dc = -1; dc <= 1 && !saved; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          const nr = r + dr, nc = c + dc;
+          if (!inBounds(nr, nc)) continue;
+          const captive = state.board[nr][nc];
+          if (!captive || captive.color === color || captive.type === PIECE.KING) continue;
+          saved = tryPower(() => {
+            const res = castImprison(state, r, c, nr, nc);
+            return res && res.success && escaped();
+          });
+        }
+      }
+    }
+
+    // --- Frost: freeze the checker so it can't recapture on next turn. But doesn't resolve
+    // current check. Skip.
+
+    // --- Chronobreak: undoes opponent's last move, reverting the position before the
+    // attacking move. If we had no check before, we won't after Chronobreak either.
+    if (!saved && aether >= POWER_COSTS[POWER.CHRONOBREAK]) {
+      saved = tryPower(() => {
+        const res = castChronobreak(state);
+        return res && res.success && escaped();
+      });
+    }
+
+    // --- Double Attack: captures with the mover. Could capture the checker + move on. Cost 14.
+    // Expensive search but needed for completeness. Limit: only try friendly pieces whose
+    // first-move legal targets include the checker square.
+    if (!saved && aether >= POWER_COSTS[POWER.DOUBLE_ATTACK]) {
+      for (let r = 0; r < 8 && !saved; r++) for (let c = 0; c < 8 && !saved; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color !== color || p.type === PIECE.KING) continue;
+        const firstMoves = legalMoves(state.board, r, c, state);
+        for (const m1 of firstMoves) {
+          if (saved) break;
+          // After first move, attacker is on m1.r/m1.c. Find any legal second move.
+          const tempSnap = snapshot(state.board);
+          const tempMana = { ...state.mana };
+          // Simulate first step manually (shield-aware) to compute second-step options.
+          const tgt = state.board[m1.r][m1.c];
+          if (tgt && tgt.type === PIECE.KING) continue;
+          if (tgt && tgt.shieldHP > 0) { /* shield blocks; attacker stays on r,c */ }
+          else { state.board[m1.r][m1.c] = state.board[r][c]; state.board[r][c] = null; state.board[m1.r][m1.c].hasMoved = true; }
+          const curR = (tgt && tgt.shieldHP > 0) ? r : m1.r;
+          const curC = (tgt && tgt.shieldHP > 0) ? c : m1.c;
+          const secondMoves = legalMoves(state.board, curR, curC, state);
+          restore(state.board, tempSnap);
+          state.mana = tempMana;
+          for (const m2 of secondMoves) {
+            if (saved) break;
+            if (m2.r === curR && m2.c === curC) continue;
+            saved = tryPower(() => {
+              const res = castDoubleAttack(state, r, c, m1.r, m1.c, m2.r, m2.c);
+              return res && res.success && escaped();
+            });
+          }
+        }
+      }
+    }
+
+    // --- Wall / Spawn: place pawns that might block the check line.
+    if (!saved && aether >= POWER_COSTS[POWER.SPAWN]) {
+      for (let r = 0; r < 8 && !saved; r++) for (let c = 0; c < 8 && !saved; c++) {
+        if (state.board[r][c]) continue;
+        saved = tryPower(() => {
+          const res = castSpawn(state, r, c);
+          return res && res.success && escaped();
+        });
+      }
+    }
+    if (!saved && aether >= POWER_COSTS[POWER.WALL]) {
+      for (let r = 0; r < 8 && !saved; r++) for (let c = 0; c < 8 && !saved; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color !== color) continue;
+        saved = tryPower(() => {
+          const res = castWall(state, r, c);
+          return res && res.success && escaped();
+        });
+      }
+    }
+  } finally {
+    state.turn = savedTurn;
+  }
+
+  return saved;
+}
+
+// Similar 1-ply check for stalemate: can the opponent cast some affordable power to give
+// themselves a legal move? Simpler: any power that ADDS a friendly piece (Spawn, Wall) or
+// removes a friendly blocker that's in their own way. For now, we just check Spawn / Wall.
+function canOpponentEscapeStalemateWithPowers(state, color) {
+  if (state.aetherBlocked[color]) return false;
+  const aether = state.mana[color];
+  if (aether < Math.min(POWER_COSTS[POWER.SPAWN], POWER_COSTS[POWER.WALL])) return false;
+
+  const snap = snapshot(state.board);
+  const snapMana = { ...state.mana };
+  const snapBombs = state.bombs.map(b => ({ ...b }));
+  const savedTurn = state.turn;
+  state.turn = color;
+
+  const tryIt = (fn) => {
+    try { return !!fn(); }
+    finally {
+      restore(state.board, snap);
+      state.mana = { ...snapMana };
+      state.bombs = snapBombs.map(b => ({ ...b }));
+      state.timeBombs = state.bombs;
+    }
+  };
+
+  let saved = false;
+  try {
+    if (aether >= POWER_COSTS[POWER.SPAWN]) {
+      // If Spawn works, we'll have at least one legal move next turn (the spawned pawn's).
+      outer1:
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        if (state.board[r][c]) continue;
+        if (tryIt(() => { const res = castSpawn(state, r, c); return res && res.success; })) { saved = true; break outer1; }
+      }
+    }
+  } finally {
+    state.turn = savedTurn;
+  }
+  return saved;
+}
+
+// ---------- Imprison release ----------
+// When a captor piece dies and it was holding a prisoner, return the prisoner to its
+// color's home rank on the file it remembers (stored on capture). If the starting tile
+// is occupied, the prisoner is destroyed. Returns { placed, destroyed, r, c }.
+function releasePrisonerToHome(state, prisoner) {
+  if (!prisoner) return null;
+  const homeRank = prisoner.color === COLOR.WHITE ? 7 : 0;
+  // If we saved the original starting file when imprisoning, use it; else fall back
+  // to the captive's current file is meaningless (they're not on the board any more),
+  // so default to a piece-type best-guess starting file.
+  const file = (prisoner.originFile != null)
+    ? prisoner.originFile
+    : defaultStartFile(prisoner.type);
+  // Clear captive-flag fields before placing so the released piece behaves normally.
+  delete prisoner.originFile;
+  prisoner.hasMoved = true;      // released piece has "moved" — no double-push, no castle
+  prisoner.imprisoned = null;
+  prisoner.frozenUntil = 0;
+  prisoner.shieldHP = 0;
+  if (state.board[homeRank][file]) {
+    state.log.push(`${colorName(prisoner.color)}'s ${prisoner.type} prisoner destroyed — home tile ${algebraic(homeRank, file)} was occupied.`);
+    return { placed: false, destroyed: true, r: homeRank, c: file };
+  }
+  state.board[homeRank][file] = prisoner;
+  state.log.push(`Prisoner ${prisoner.type} released to ${algebraic(homeRank, file)}.`);
+  return { placed: true, destroyed: false, r: homeRank, c: file };
+}
+
+// Used only when originFile wasn't recorded (shouldn't normally happen post-v3.3).
+function defaultStartFile(type) {
+  switch (type) {
+    case PIECE.ROOK: return 0;
+    case PIECE.KNIGHT: return 1;
+    case PIECE.BISHOP: return 2;
+    case PIECE.QUEEN: return 3;
+    case PIECE.KING: return 4;
+    default: return 4; // pawn: pick a sensible middle file
+  }
+}
+
 // ---------- Phase 3: End of Turn ----------
 function endOfTurn(state) {
   if (state.winner) return;
@@ -302,16 +545,24 @@ function endOfTurn(state) {
   // Check win conditions for opponent (who is about to move)
   const opp = opposite(state.turn);
   if (isCheckmate(state.board, opp, state)) {
-    state.winner = state.turn;
-    state.winReason = 'CHECKMATE';
-    state.log.push(`Checkmate! ${colorName(state.turn)} wins.`);
-    return;
-  }
-  if (isStalemate(state.board, opp, state)) {
-    state.winner = 'DRAW';
-    state.winReason = 'STALEMATE';
-    state.log.push(`Stalemate - draw.`);
-    return;
+    // v3.3: before declaring mate, verify the opponent can't escape with ANY affordable
+    // single power cast either. If some power would relieve check, the game continues.
+    if (!canOpponentEscapeMateWithPowers(state, opp)) {
+      state.winner = state.turn;
+      state.winReason = 'CHECKMATE';
+      state.log.push(`Checkmate! ${colorName(state.turn)} wins.`);
+      return;
+    }
+    // Mate is NOT unavoidable — continue; opponent will have to cast a power on their turn.
+    state.log.push(`${colorName(opp)} is in check — only a power can save them.`);
+  } else if (isStalemate(state.board, opp, state)) {
+    // Stalemate: same logic. If a power could unlock a legal move, continue instead of draw.
+    if (!canOpponentEscapeStalemateWithPowers(state, opp)) {
+      state.winner = 'DRAW';
+      state.winReason = 'STALEMATE';
+      state.log.push(`Stalemate - draw.`);
+      return;
+    }
   }
 
   // Generate Aether for the player whose turn just ended (new model: end-of-turn gen)
@@ -345,7 +596,7 @@ function makeMove(state, fromR, fromC, toR, toC, promotionType) {
   if (piece.color !== state.turn) return { error: 'Not your piece' };
   if (piece.isSpectral) return { error: 'Spectral pieces cannot move' };
   if (piece.frozenUntil && piece.frozenUntil > state.turnNumber) return { error: 'Piece is frozen' };
-  if (piece.imprisoned) return { error: 'Captor cannot move while holding captive' };
+  // NOTE (v3.3): captors CAN now move while holding a prisoner.
 
   const legal = legalMoves(state.board, fromR, fromC, state);
   const move = legal.find(m => m.r === toR && m.c === toC);
@@ -404,25 +655,9 @@ function makeMove(state, fromR, fromC, toR, toC, promotionType) {
   state.board[fromR][fromC] = null;
   piece.hasMoved = true;
 
-  // Release captive from captured captor — place on captor's square (toR,toC) if attacker doesn't occupy it,
-  // otherwise nearest empty of 8 surrounding; else destroy.
-  if (releasedCaptive) {
-    // attacker is now on toR,toC — find nearest empty neighbor
-    let placed = false;
-    const neighbors = [[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1],[0,-1],[-1,-1]];
-    for (const [dr, dc] of neighbors) {
-      const nr = toR + dr, nc = toC + dc;
-      if (inBounds(nr, nc) && !state.board[nr][nc]) {
-        state.board[nr][nc] = releasedCaptive;
-        placed = true;
-        state.log.push(`Captive ${releasedCaptive.type} released at ${algebraic(nr,nc)}.`);
-        break;
-      }
-    }
-    if (!placed) {
-      state.log.push(`Captive ${releasedCaptive.type} destroyed (no empty square).`);
-    }
-  }
+  // v3.3: when a captor dies by capture, the prisoner returns to its ORIGINAL starting
+  // tile (home rank + original file). If occupied, the prisoner is destroyed.
+  if (releasedCaptive) releasePrisonerToHome(state, releasedCaptive);
 
   if (move.doublePush) {
     const epRow = (fromR + toR) / 2;
@@ -470,6 +705,10 @@ function sacrificePiece(state, r, c) {
   state.mana[color] = Math.min(AETHER_CAP, state.mana[color] + gain);
   state.sacrificedThisTurn[color] = true;
   state.log.push(`Sacrificed ${piece.type}: +${state.mana[color] - before} Aether.`);
+  // v3.3: if the sacrificed piece was a captor, the prisoner dies too.
+  if (piece.imprisoned) {
+    state.log.push(`${piece.imprisoned.color === COLOR.WHITE ? 'White' : 'Black'}'s imprisoned ${piece.imprisoned.type} perished with its captor.`);
+  }
   return { success: true, gain };
 }
 
@@ -609,90 +848,6 @@ function castSpawn(state, r, c) {
   return { success: true };
 }
 
-// GHOST (1 turn only, turn ends, cannot mate)
-function castGhost(state, r, c) {
-  if (state.winner) return { error: 'Game over' };
-  const color = state.turn;
-  const err = requireAether(state, color, POWER.GHOST); if (err) return { error: err };
-  const p = state.board[r][c];
-  if (!p) return { error: 'No piece' };
-  if (p.color !== color) return { error: 'Not your piece' };
-  if (p.isSpectral || p.imprisoned || (p.frozenUntil && p.frozenUntil > state.turnNumber)) {
-    return { error: 'Piece cannot be Ghosted' };
-  }
-
-  // Ghost is cast AND then the player must make a move with this piece. We model this by
-  // setting isPhased and requiring the player to move a phased piece this turn. For simplicity,
-  // we set the flag and end-of-turn will decrement. Turn does NOT end inside cast — player
-  // must manually move the phased piece for full flow. BUT spec says "turn ends after use":
-  // we end the turn here. That means Ghost = free board-traversal buff for the next move cycle,
-  // used as a single-action power that simply marks the piece as phased for the upcoming attacks.
-  // Cleaner: treat Ghost as: during this single cast, the player picks a piece AND a destination
-  // (moving it as if phased). Implement accordingly.
-  return { error: 'Ghost must include a destination (use castGhostMove)' };
-}
-
-// Ghost with source + destination (move phased for this move)
-function castGhostMove(state, fromR, fromC, toR, toC) {
-  if (state.winner) return { error: 'Game over' };
-  const color = state.turn;
-  const err = requireAether(state, color, POWER.GHOST); if (err) return { error: err };
-  const p = state.board[fromR][fromC];
-  if (!p) return { error: 'No source' };
-  if (p.color !== color) return { error: 'Not your piece' };
-  if (p.isSpectral || p.imprisoned || (p.frozenUntil && p.frozenUntil > state.turnNumber)) {
-    return { error: 'Piece cannot be Ghosted' };
-  }
-
-  // Enable phasing on piece for the simulation
-  p.isPhased = true;
-  p.phaseTurnsLeft = 1;
-  const moves = legalMoves(state.board, fromR, fromC, state);
-  const m = moves.find(mv => mv.r === toR && mv.c === toC);
-  if (!m) { p.isPhased = false; p.phaseTurnsLeft = 0; return { error: 'Illegal Ghost move' }; }
-
-  // Check no self-check after
-  const snap = snapshot(state.board);
-  state.board[toR][toC] = p;
-  state.board[fromR][fromC] = null;
-  if (isInCheck(state.board, color)) {
-    restore(state.board, snap);
-    p.isPhased = false; p.phaseTurnsLeft = 0;
-    return { error: 'Would leave King in check' };
-  }
-  // Cannot deliver mate
-  if (isCheckmate(state.board, opposite(color), state)) {
-    restore(state.board, snap);
-    p.isPhased = false; p.phaseTurnsLeft = 0;
-    return { error: 'Ghost cannot deliver checkmate' };
-  }
-  restore(state.board, snap);
-  p.isPhased = false; p.phaseTurnsLeft = 0;
-
-  pushHistory(state);
-
-  // Now apply for real: move (respecting shields on target if any, simple capture)
-  const target = state.board[toR][toC];
-  if (target && target.shieldHP > 0) {
-    target.shieldHP -= 1;
-    spendAether(state, color, POWER_COSTS[POWER.GHOST]);
-    state.log.push(`Ghost: shield absorbed attack on ${algebraic(toR,toC)}.`);
-    clearPerTurnEffects(state, state.turn);
-    endOfTurn(state);
-    return { success: true, shieldBroke: true };
-  }
-  state.board[toR][toC] = p;
-  state.board[fromR][fromC] = null;
-  p.hasMoved = true;
-  defuseBombAt(state, toR, toC);
-  spendAether(state, color, POWER_COSTS[POWER.GHOST]);
-  state.log.push(`Ghost move: ${p.type} phased to ${algebraic(toR,toC)}.`);
-  state.lastMoveInfo = { type: 'GHOST', from: {r:fromR,c:fromC}, to: {r:toR,c:toC} };
-  clearPerTurnEffects(state, state.turn);
-  endOfTurn(state);
-  return { success: true, captured: target };
-}
-
 // BOMBA
 function castBomba(state, r, c) {
   if (state.winner) return { error: 'Game over' };
@@ -700,6 +855,15 @@ function castBomba(state, r, c) {
   const err = requireAether(state, color, POWER.BOMBA); if (err) return { error: err };
   if (state.board[r][c]) return { error: 'Bomba must be planted on an empty square' };
   if (state.bombs.some(b => b.r === r && b.c === c)) return { error: 'Already a bomb here' };
+
+  // v3.3 placement rules:
+  // (1) Default: must be on the single row one rank AHEAD of the caster's
+  //     furthest-advanced pawn — i.e., "the row just in front of your pawn line."
+  // (2) Pawn-laid: if a friendly pawn exists diagonally adjacent to the target square,
+  //     the placement is legal as long as the target square itself is empty.
+  if (!validBombaTarget(state, color, r, c)) {
+    return { error: 'Bomba must land on the row ahead of your furthest pawn, or diagonally from one of your pawns.' };
+  }
 
   pushHistory(state);
   state.bombs.push({ r, c, owner: color, turnsLeft: 2, revealed: true });
@@ -709,86 +873,138 @@ function castBomba(state, r, c) {
   return { success: true };
 }
 
+// True if (r, c) is a valid Bomba placement for `color` under v3.3 rules.
+function validBombaTarget(state, color, r, c) {
+  // Rule 2 (pawn-laid): any friendly pawn diagonally adjacent?
+  const adj = [[-1,-1],[-1,1],[1,-1],[1,1]];
+  for (const [dr, dc] of adj) {
+    const nr = r + dr, nc = c + dc;
+    if (!inBounds(nr, nc)) continue;
+    const p = state.board[nr][nc];
+    if (p && p.type === PIECE.PAWN && p.color === color && !p.isSpectral) return true;
+  }
+  // Rule 1 (default): one row ahead of the player's furthest-advanced pawn.
+  const dir = color === COLOR.WHITE ? -1 : 1;
+  let furthestRow = null;
+  for (let rr = 0; rr < 8; rr++) {
+    for (let cc = 0; cc < 8; cc++) {
+      const p = state.board[rr][cc];
+      if (!p || p.color !== color || p.type !== PIECE.PAWN || p.isSpectral) continue;
+      if (furthestRow == null) { furthestRow = rr; continue; }
+      // "furthest" = closest to opponent's back rank
+      if (color === COLOR.WHITE ? rr < furthestRow : rr > furthestRow) furthestRow = rr;
+    }
+  }
+  if (furthestRow == null) return false; // no pawns left, no default placement
+  const allowedRow = furthestRow + dir;
+  return r === allowedRow;
+}
+
 // CHAIN LIGHTNING
-function castChainLightning(state, fromR, fromC, toR, toC, jumpR, jumpC) {
+function castDoubleAttack(state, fromR, fromC, toR, toC, jumpR, jumpC) {
+  // v3.3 Double Attack: the same piece makes TWO legal moves in one turn.
+  // Signature kept from Chain Lightning for wire compatibility:
+  //   fromR,fromC  — attacker square
+  //   toR,toC      — first destination (must be a legal move from source)
+  //   jumpR,jumpC  — second destination (must be a legal move from the first landing)
+  // Captures are allowed on either step. Cannot target or capture the King.
+  // Cannot deliver checkmate, cannot leave own King in check at any intermediate step.
   if (state.winner) return { error: 'Game over' };
   const color = state.turn;
-  const err = requireAether(state, color, POWER.CHAIN_LIGHTNING); if (err) return { error: err };
+  const err = requireAether(state, color, POWER.DOUBLE_ATTACK); if (err) return { error: err };
   const attacker = state.board[fromR][fromC];
   if (!attacker) return { error: 'No attacker' };
   if (attacker.color !== color) return { error: 'Not your piece' };
+  if (attacker.type === PIECE.KING) return { error: 'Double Attack cannot target the King' };
   if (attacker.imprisoned || attacker.isSpectral || (attacker.frozenUntil && attacker.frozenUntil > state.turnNumber)) {
-    return { error: 'Piece cannot cast Chain Lightning' };
+    return { error: 'Piece cannot cast Double Attack' };
   }
 
-  const legal = legalMoves(state.board, fromR, fromC, state);
-  const firstMove = legal.find(m => m.r === toR && m.c === toC && m.capture);
-  if (!firstMove) return { error: 'First target must be a legal capture' };
+  const firstLegal = legalMoves(state.board, fromR, fromC, state);
+  const firstMove = firstLegal.find(m => m.r === toR && m.c === toC);
+  if (!firstMove) return { error: 'First move must be legal for this piece' };
 
+  // Reject if either destination would land on a King.
   const firstTarget = state.board[toR][toC];
-  if (!firstTarget || firstTarget.color === color) return { error: 'First target must be enemy' };
-
-  const dr = Math.abs(jumpR - toR), dc = Math.abs(jumpC - toC);
-  if (dr > 1 || dc > 1 || (dr === 0 && dc === 0)) return { error: 'Second target must be adjacent to first' };
-  const secondTarget = state.board[jumpR][jumpC];
-  if (!secondTarget) return { error: 'No piece at second target' };
-  if (secondTarget.color === color) return { error: 'Cannot chain onto own piece' };
-  if (secondTarget.type === PIECE.KING) return { error: 'Cannot chain to King' };
+  if (firstTarget && firstTarget.type === PIECE.KING) return { error: 'Cannot attack the King' };
 
   pushHistory(state);
 
-  // v3.2 behavior:
-  // Step 1: attacker destroys first target.
-  //   - If first target is shielded, shield absorbs, attacker stays put, chain ENDS.
-  //   - Otherwise, first target is removed (attacker has NOT moved yet).
-  // Step 2: attacker teleports to second target's square.
-  //   - If second target is shielded, shield absorbs, attacker stays on source, chain ENDS here
-  //     (first target has already been destroyed — that damage sticks).
-  //   - Otherwise, second target is removed AND attacker relocates to (jumpR, jumpC).
-  let endedEarly = null;
-  let firstHit = false, secondHit = false;
-
-  if (firstTarget.shieldHP > 0) {
-    firstTarget.shieldHP -= 1;
-    endedEarly = 'first shield';
+  // Step 1 — apply the first move in full (respect shields, imprison-release, etc.)
+  // We re-use makeMove's rules by simulating locally.
+  const firstCaptor = (firstTarget && firstMove.capture) ? firstTarget : null;
+  let firstShieldBlock = false;
+  if (firstCaptor && firstCaptor.shieldHP > 0) {
+    firstCaptor.shieldHP -= 1;
+    firstShieldBlock = true;
+    // Attacker did NOT move; turn still continues via second move.
   } else {
-    state.board[toR][toC] = null;
-    firstHit = true;
+    // Release prisoner if the captured piece was a captor
+    if (firstCaptor && firstCaptor.imprisoned) releasePrisonerToHome(state, firstCaptor.imprisoned);
+    state.board[toR][toC] = attacker;
+    state.board[fromR][fromC] = null;
+    attacker.hasMoved = true;
   }
 
-  if (!endedEarly) {
-    if (secondTarget.shieldHP > 0) {
-      secondTarget.shieldHP -= 1;
-      endedEarly = 'second shield';
-    } else {
-      state.board[jumpR][jumpC] = null;
-      // Move the attacker to the 2nd target square
-      state.board[fromR][fromC] = null;
-      state.board[jumpR][jumpC] = attacker;
-      attacker.hasMoved = true;
-      secondHit = true;
-    }
-  }
-
-  // v3.2 "Leapfrog" fix: if landing leaves king in check (e.g. attacker was pinned),
-  // or chain would deliver mate, reject entirely.
+  // If first step left our own king in check, abort.
   if (isInCheck(state.board, color)) {
     popHistory(state);
-    return { error: 'Chain Lightning would leave your King in check' };
+    return { error: 'First move would leave your King in check' };
+  }
+
+  // Step 2 — from attacker's current square. If the first step was shield-blocked,
+  // the attacker is still on fromR,fromC; else on toR,toC.
+  const curR = firstShieldBlock ? fromR : toR;
+  const curC = firstShieldBlock ? fromC : toC;
+  // Can't move to same square; second move can be no-op only if first was a capture
+  // (i.e. we allow player to "skip" second by choosing first==second==cur).
+  // For simplicity: require a distinct, legal second move.
+  if (jumpR === curR && jumpC === curC) {
+    popHistory(state);
+    return { error: 'Second move must differ from first landing' };
+  }
+
+  const secondTarget = state.board[jumpR][jumpC];
+  if (secondTarget && secondTarget.type === PIECE.KING) {
+    popHistory(state);
+    return { error: 'Cannot attack the King' };
+  }
+
+  const secondLegal = legalMoves(state.board, curR, curC, state);
+  const secondMove = secondLegal.find(m => m.r === jumpR && m.c === jumpC);
+  if (!secondMove) {
+    popHistory(state);
+    return { error: 'Second move must be legal for this piece' };
+  }
+
+  const secondCaptor = (secondTarget && secondMove.capture) ? secondTarget : null;
+  let secondShieldBlock = false;
+  if (secondCaptor && secondCaptor.shieldHP > 0) {
+    secondCaptor.shieldHP -= 1;
+    secondShieldBlock = true;
+  } else {
+    if (secondCaptor && secondCaptor.imprisoned) releasePrisonerToHome(state, secondCaptor.imprisoned);
+    state.board[jumpR][jumpC] = attacker;
+    state.board[curR][curC] = null;
+    attacker.hasMoved = true;
+  }
+
+  if (isInCheck(state.board, color)) {
+    popHistory(state);
+    return { error: 'Double Attack would leave your King in check' };
   }
   if (isCheckmate(state.board, opposite(color), state)) {
     popHistory(state);
-    return { error: 'Chain Lightning cannot deliver checkmate' };
+    return { error: 'Double Attack cannot deliver checkmate' };
   }
 
-  spendAether(state, color, POWER_COSTS[POWER.CHAIN_LIGHTNING]);
-  if (endedEarly === 'first shield') state.log.push(`Chain Lightning blocked by shield on first target.`);
-  else if (endedEarly === 'second shield') state.log.push(`Chain Lightning: captured ${algebraic(toR,toC)}; second target's shield absorbed hit.`);
-  else state.log.push(`Chain Lightning: captured ${algebraic(toR,toC)} and ${algebraic(jumpR,jumpC)} — attacker landed on ${algebraic(jumpR,jumpC)}.`);
-  state.lastMoveInfo = { type:'CHAIN', from:{r:fromR,c:fromC}, to:{r:toR,c:toC}, jump:{r:jumpR,c:jumpC} };
+  spendAether(state, color, POWER_COSTS[POWER.DOUBLE_ATTACK]);
+  state.log.push(`Double Attack: ${algebraic(fromR,fromC)} → ${algebraic(toR,toC)} → ${algebraic(jumpR,jumpC)}.`);
+  state.lastMoveInfo = { type:'DOUBLE_ATTACK', from:{r:fromR,c:fromC}, to:{r:toR,c:toC}, jump:{r:jumpR,c:jumpC} };
+  state.lastActionKind = 'POWER';
   clearPerTurnEffects(state, state.turn);
   endOfTurn(state);
-  return { success: true, firstHit, secondHit };
+  return { success: true, firstShieldBlock, secondShieldBlock };
 }
 
 // IMPRISON
@@ -814,8 +1030,9 @@ function castImprison(state, captorR, captorC, captiveR, captiveC) {
   if (captive.imprisoned) return { error: 'No nested cages' };
 
   pushHistory(state);
-  // Strip shields/phases from captive when imprisoned
-  const caged = { ...captive };
+  // Strip shields/phases from captive when imprisoned. Remember its starting file
+  // so Cleanse / captor-death can release the prisoner to its original home tile.
+  const caged = { ...captive, originFile: captiveC };
   captor.imprisoned = caged;
   state.board[captiveR][captiveC] = null;
 
@@ -843,6 +1060,46 @@ function castAetherBlock(state) {
   spendAether(state, color, POWER_COSTS[POWER.AETHER_BLOCK]);
   state.log.push(`Aether Block! ${colorName(opp)} cannot spend Aether next turn.`);
   return { success: true };
+}
+
+// CLEANSE — remove Imprison and/or Frost from any piece (own or enemy).
+// If the target is a captor, its prisoner is released to its home tile (or destroyed if occupied).
+// Does not target the King (kings can't be frozen or imprisoned anyway, but explicit for clarity).
+// Turn continues.
+function castCleanse(state, r, c) {
+  if (state.winner) return { error: 'Game over' };
+  const color = state.turn;
+  const err = requireAether(state, color, POWER.CLEANSE); if (err) return { error: err };
+  const target = state.board[r][c];
+  if (!target) return { error: 'No target' };
+  if (target.type === PIECE.KING) return { error: 'Cannot target the King' };
+  const wasFrozen = !!(target.frozenUntil && target.frozenUntil > state.turnNumber);
+  const wasCaptor = !!target.imprisoned;
+  if (!wasFrozen && !wasCaptor) return { error: 'Nothing to cleanse on this piece' };
+
+  pushHistory(state);
+  let releasedInfo = null;
+  if (wasCaptor) {
+    releasedInfo = releasePrisonerToHome(state, target.imprisoned);
+    target.imprisoned = null;
+  }
+  if (wasFrozen) {
+    target.frozenUntil = 0;
+  }
+  // Can't self-check by cleansing. But cleansing someone next to your king could theoretically
+  // unfreeze an attacker. Validate.
+  if (isInCheck(state.board, color)) {
+    popHistory(state);
+    return { error: 'Cleanse would leave your King in check' };
+  }
+
+  spendAether(state, color, POWER_COSTS[POWER.CLEANSE]);
+  const parts = [];
+  if (wasCaptor) parts.push('freed prisoner');
+  if (wasFrozen) parts.push('thawed frost');
+  state.log.push(`Cleanse on ${algebraic(r,c)}: ${parts.join(' + ')}.`);
+  state.lastActionKind = 'POWER';
+  return { success: true, released: releasedInfo, thawed: wasFrozen };
 }
 
 // PROMOTE
@@ -977,32 +1234,16 @@ function castWall(state, r, c) {
     return { error: 'Wall would leave your King in check' };
   }
 
+  // v3.3: Wall cannot be cast if the resulting position gives check or mate to the enemy King.
+  // This enforces "no power can end the game by hitting the King" — Wall must be defensive/positional.
+  const opp = opposite(color);
+  if (isInCheck(state.board, opp)) {
+    popHistory(state);
+    return { error: 'Wall cannot put the enemy King in check — powers do not target the King.' };
+  }
+
   spendAether(state, color, POWER_COSTS[POWER.WALL]);
   state.log.push(`The Wall: ${spawnSquares.length} pawns spawned around ${algebraic(r,c)}.`);
-
-  // Mate check
-  const opp = opposite(color);
-  if (isCheckmate(state.board, opp, state)) {
-    state.winner = color;
-    state.winReason = 'CHECKMATE';
-    state.log.push('Checkmate by The Wall!');
-    return { success: true, mate: true };
-  }
-  // v3.2: If Wall creates stalemate (no moves, not in check), convert to
-  // "Aether Battle" win for the Aether leader rather than a draw.
-  if (isStalemate(state.board, opp, state)) {
-    const myA = state.mana[color], theirA = state.mana[opp];
-    if (myA >= theirA) {
-      state.winner = color;
-      state.winReason = 'AETHER_STALEMATE_WIN';
-      state.log.push(`Wall stalemate — ${colorName(color)} wins on Aether (${myA} vs ${theirA}).`);
-    } else {
-      state.winner = opp;
-      state.winReason = 'AETHER_STALEMATE_WIN';
-      state.log.push(`Wall stalemate — ${colorName(opp)} wins on Aether (${theirA} vs ${myA}).`);
-    }
-    return { success: true };
-  }
   state.lastMoveInfo = { type: 'WALL', to: {r,c} };
   state.lastActionKind = 'POWER';
   clearPerTurnEffects(state, state.turn);
@@ -1074,14 +1315,17 @@ function initGame(opts = {}) {
   return state;
 }
 
-// Back-compat shims to old names used by some tests/UI
-const castPhaseShift = castGhost; // old name mapped to Ghost (tests may call this)
+// Back-compat shims to old names (tests may still reference some)
 const castNova = () => ({ error: 'Nova removed in v3.0' });
 const castManaBurn = () => ({ error: 'Mana Burn replaced by Aether Block' });
 const castMitosis = () => ({ error: 'Mitosis removed in v3.0' });
+const castGhost = () => ({ error: 'Ghost removed in v3.3' });
+const castGhostMove = () => ({ error: 'Ghost removed in v3.3' });
+const castPhaseShift = castGhost;
+const castChainLightning = castDoubleAttack;  // renamed to Double Attack in v3.3
 const castRewind = castChronobreak;
 const castTimeBomb = castBomba;
-const FOUNTAIN_SQUARES = []; // deprecated — fountains are per-game random now; accessible via state.fountains
+const FOUNTAIN_SQUARES = []; // deprecated — fountains are per-game random; accessible via state.fountains
 
 // Expose
 (function() {
@@ -1094,12 +1338,13 @@ const FOUNTAIN_SQUARES = []; // deprecated — fountains are per-game random now
     aetherBaseGenForTurn,
     createGameState, initGame, startOfTurn, endOfTurn, makeMove, sacrificePiece,
     castFrost, castFortify, castBlink, castSpawn,
-    castGhost, castGhostMove, castBomba, castChainLightning, castImprison, castAetherBlock,
+    castBomba, castDoubleAttack, castImprison, castAetherBlock, castCleanse,
     castPromote, castChronobreak, castVengeance, castWall,
     // Back-compat
-    castPhaseShift, castNova, castManaBurn, castMitosis, castRewind, castTimeBomb,
+    castGhost, castGhostMove, castPhaseShift, castChainLightning,
+    castNova, castManaBurn, castMitosis, castRewind, castTimeBomb,
     detonateBomb, defuseBombAt, controlsCenter, occupiedFountains, canAfford, colorName,
-    randomFountains
+    randomFountains, validBombaTarget
   });
 })();
 
@@ -1111,9 +1356,11 @@ if (typeof module !== 'undefined' && module.exports) {
     aetherBaseGenForTurn,
     createGameState, initGame, startOfTurn, endOfTurn, makeMove, sacrificePiece,
     castFrost, castFortify, castBlink, castSpawn,
-    castGhost, castGhostMove, castBomba, castChainLightning, castImprison, castAetherBlock,
+    castBomba, castDoubleAttack, castImprison, castAetherBlock, castCleanse,
     castPromote, castChronobreak, castVengeance, castWall,
+    // Back-compat
+    castGhost, castGhostMove, castChainLightning,
     detonateBomb, defuseBombAt, controlsCenter, occupiedFountains, canAfford, colorName,
-    randomFountains
+    randomFountains, validBombaTarget
   };
 }

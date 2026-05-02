@@ -308,19 +308,22 @@ function applyAction(room, color, action) {
     case 'POWER_CAST': {
       const p = payload.power;
       switch (p) {
-        case 'FROST':           result = mana.castFrost(s, payload.r, payload.c); break;
-        case 'FORTIFY':         result = mana.castFortify(s, payload.r, payload.c); break;
-        case 'BLINK':           result = mana.castBlink(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c); break;
-        case 'SPAWN':           result = mana.castSpawn(s, payload.r, payload.c); break;
-        case 'GHOST':           result = mana.castGhostMove(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c); break;
-        case 'BOMBA':           result = mana.castBomba(s, payload.r, payload.c); break;
-        case 'CHAIN_LIGHTNING': result = mana.castChainLightning(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.jump.r, payload.jump.c); break;
-        case 'IMPRISON':        result = mana.castImprison(s, payload.captor.r, payload.captor.c, payload.captive.r, payload.captive.c); break;
-        case 'AETHER_BLOCK':    result = mana.castAetherBlock(s); break;
-        case 'PROMOTE':         result = mana.castPromote(s, payload.r, payload.c, payload.newType); break;
-        case 'CHRONOBREAK':     result = mana.castChronobreak(s); break;
-        case 'VENGEANCE':       result = mana.castVengeance(s, payload.r, payload.c); break;
-        case 'WALL':            result = mana.castWall(s, payload.r, payload.c); break;
+        case 'FROST':         result = mana.castFrost(s, payload.r, payload.c); break;
+        case 'FORTIFY':       result = mana.castFortify(s, payload.r, payload.c); break;
+        case 'BLINK':         result = mana.castBlink(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c); break;
+        case 'SPAWN':         result = mana.castSpawn(s, payload.r, payload.c); break;
+        case 'BOMBA':         result = mana.castBomba(s, payload.r, payload.c); break;
+        case 'DOUBLE_ATTACK': result = mana.castDoubleAttack(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.jump.r, payload.jump.c); break;
+        case 'IMPRISON':      result = mana.castImprison(s, payload.captor.r, payload.captor.c, payload.captive.r, payload.captive.c); break;
+        case 'AETHER_BLOCK':  result = mana.castAetherBlock(s); break;
+        case 'CLEANSE':       result = mana.castCleanse(s, payload.r, payload.c); break;
+        case 'PROMOTE':       result = mana.castPromote(s, payload.r, payload.c, payload.newType); break;
+        case 'CHRONOBREAK':   result = mana.castChronobreak(s); break;
+        case 'VENGEANCE':     result = mana.castVengeance(s, payload.r, payload.c); break;
+        case 'WALL':          result = mana.castWall(s, payload.r, payload.c); break;
+        // Back-compat for older clients during rollout
+        case 'CHAIN_LIGHTNING': result = mana.castDoubleAttack(s, payload.from.r, payload.from.c, payload.to.r, payload.to.c, payload.jump.r, payload.jump.c); break;
+        case 'GHOST':         result = { error: 'Ghost has been removed in v3.3. Please refresh the page.' }; break;
         default: return { error: 'Unknown power: ' + p };
       }
       break;

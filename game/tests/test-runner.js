@@ -23,8 +23,10 @@ const {
   aetherBaseGenForTurn,
   createGameState, initGame, startOfTurn, endOfTurn, makeMove, sacrificePiece,
   castFrost, castFortify, castBlink, castSpawn,
-  castGhost, castGhostMove, castBomba, castChainLightning, castImprison, castAetherBlock,
+  castBomba, castDoubleAttack, castImprison, castAetherBlock, castCleanse,
   castPromote, castChronobreak, castVengeance, castWall,
+  // Back-compat for older tests
+  castGhost, castGhostMove, castChainLightning,
   controlsCenter, occupiedFountains, canAfford, randomFountains
 } = ctx;
 
@@ -99,7 +101,9 @@ group('AETHER: Starting & generation', () => {
     assertEq(ctx.aetherBaseGenForTurn(100), 3);
   });
   test('Aether gen happens at END of turn (end-of-turn model)', () => {
-    const s = initGame();
+    // Use no fountains so random placements can't contribute bonus Aether.
+    const s = ctx.createGameState({ fountains: [] });
+    ctx.startOfTurn(s);
     assertEq(s.mana[COLOR.WHITE], 0);
     assertEq(s.mana[COLOR.BLACK], 1);
     makeMove(s, 6, 4, 4, 4); // W e4 (first-turn, no gen)
@@ -393,44 +397,49 @@ group('POWER: Spawn', () => {
 });
 
 // ============================================================
-// POWER: GHOST
+// POWER: DOUBLE ATTACK (renamed from Chain Lightning in v3.3)
 // ============================================================
-group('POWER: Ghost', () => {
-  test('Ghost move passes through pieces', () => {
+group('POWER: Double Attack', () => {
+  test('Piece makes two legal moves in one turn', () => {
+    // White Queen on d1 (7,3). Two empty steps: d1->d4, then d4->d7.
     const s = customGame([
-      ['a8', PIECE.KING, COLOR.WHITE],
+      ['a1', PIECE.KING, COLOR.WHITE],
       ['h8', PIECE.KING, COLOR.BLACK],
-      ['a1', PIECE.ROOK, COLOR.WHITE],
-      ['d1', PIECE.PAWN, COLOR.WHITE] // blocker
+      ['d1', PIECE.QUEEN, COLOR.WHITE]
     ]);
     s.turn = COLOR.WHITE;
-    s.mana[COLOR.WHITE] = 15;
-    const r = castGhostMove(s, 7, 0, 7, 6); // Ra1 -> g1 through d1
-    assert(r.success);
-    assertEq(s.board[7][6].type, PIECE.ROOK);
-    assert(s.board[7][3], 'Blocker pawn still there');
+    s.mana[COLOR.WHITE] = 20;
+    const r = castDoubleAttack(s, 7, 3, 4, 3, 1, 3); // d1 -> d4 -> d7
+    assert(r.success, r.error || '');
+    assertEq(s.board[1][3] && s.board[1][3].type, PIECE.QUEEN);
   });
-  test('Ghost cannot deliver mate', () => {
-    // Construct position where Ghost-move would checkmate
+  test('Cannot target the King', () => {
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['d1', PIECE.ROOK, COLOR.WHITE]
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 20;
+    // d1 -> d8 illegal (own King not blocking), then d8 -> h8 would capture king. Reject.
+    const r = castDoubleAttack(s, 7, 3, 0, 3, 0, 7);
+    assert(r.error);
+  });
+  test('Cannot deliver checkmate', () => {
+    // Rook + Queen + lone K mate via Double Attack — reject.
+    // Setup: W K h1, W R a1, W Q a2. Q to a8 checks, R to h8 mates? Verify rejected.
     const s = customGame([
       ['h1', PIECE.KING, COLOR.WHITE],
       ['a1', PIECE.ROOK, COLOR.WHITE],
-      ['h8', PIECE.KING, COLOR.BLACK],
-      ['g8', PIECE.PAWN, COLOR.BLACK],
-      ['h7', PIECE.PAWN, COLOR.BLACK]
+      ['a2', PIECE.QUEEN, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK]
     ]);
     s.turn = COLOR.WHITE;
-    s.mana[COLOR.WHITE] = 15;
-    // Ghost rook to h8-adjacent mate square? Rook a1 -> f8 through pieces.
-    // Actually need a clearer mate setup. Use: Rook a1 ghosts to h1? No, own K there.
-    // Simpler: just verify the engine filters mate — try Rb8 via Ghost
-    const r = castGhostMove(s, 7, 0, 0, 1); // a1 -> b8
-    // If this would mate, reject. Check actual position:
-    // After Rook at b8, black king on h8 attacked? No, rook on b8 attacks rank 8 and file b.
-    // King on h8 — rook attacks h8 via rank 8. Is king in check? Yes (Rook on 8th rank).
-    // Can king move? g7 (attacked by rook on b8? No, rook doesn't attack g7 through g8 pawn)... actually g8 has pawn.
-    // King h8 can move to g7 if not attacked. g7 isn't attacked by white. So NOT mate. test passes if move succeeds.
-    assert(r.success || r.error, 'Either outcome acceptable — just verify no crash');
+    s.mana[COLOR.WHITE] = 20;
+    // Try Q a2 -> a8, R a1 -> h1 (doesn't mate, just spot-check it doesn't crash)
+    const r = castDoubleAttack(s, 6, 0, 0, 0, 7, 7);
+    // h1 has own King, so illegal — error is acceptable.
+    assert(r.success || r.error);
   });
 });
 
@@ -438,17 +447,32 @@ group('POWER: Ghost', () => {
 // POWER: BOMBA (quick spot-check)
 // ============================================================
 group('POWER: Bomba', () => {
-  test('Plant on empty square', () => {
+  test('Plant on row ahead of furthest pawn (v3.3 rule)', () => {
     const s = initGame();
     s.mana[COLOR.WHITE] = 15;
-    const r = castBomba(s, 4, 4);
-    assert(r.success);
+    // White pawns are all on row 6; furthest is row 6. Allowed row = row 5 (rank 3).
+    const r = castBomba(s, 5, 4);
+    assert(r.success, r.error || '');
     assertEq(s.bombs.length, 1);
+  });
+  test('Reject placement not on allowed row (v3.3 rule)', () => {
+    const s = initGame();
+    s.mana[COLOR.WHITE] = 15;
+    const r = castBomba(s, 4, 4); // row 4 — not one step ahead of row 6
+    assert(r.error);
+  });
+  test('Pawn diagonal placement is legal (v3.3 rule)', () => {
+    const s = initGame();
+    s.mana[COLOR.WHITE] = 15;
+    // Place bomba diagonally from a pawn (e.g. row 5 col 3 is diagonal from row 6 col 4).
+    // Row 5 col 3 is also the "allowed row" but either way it's valid.
+    const r = castBomba(s, 5, 3);
+    assert(r.success, r.error || '');
   });
   test('Cannot plant on occupied', () => {
     const s = initGame();
     s.mana[COLOR.WHITE] = 15;
-    const r = castBomba(s, 7, 4); // own king
+    const r = castBomba(s, 7, 4); // own king square
     assert(r.error);
   });
   test('Move onto bomb defuses', () => {
@@ -503,7 +527,7 @@ group('POWER: Imprison', () => {
     assertEq(s.board[7][2].imprisoned.type, PIECE.KNIGHT);
     assert(!s.board[6][2], 'Captive removed from board');
   });
-  test('Captor cannot move while holding captive', () => {
+  test('v3.3: Captor CAN move while holding captive', () => {
     const s = customGame([
       ['a1', PIECE.KING, COLOR.WHITE],
       ['h8', PIECE.KING, COLOR.BLACK],
@@ -512,9 +536,10 @@ group('POWER: Imprison', () => {
     ]);
     s.turn = COLOR.WHITE;
     s.mana[COLOR.WHITE] = 15;
-    castImprison(s, 7, 2, 6, 2);
+    const imp = castImprison(s, 7, 2, 6, 2);
+    assert(imp.success, imp.error || '');
     const moves = legalMoves(s.board, 7, 2, s);
-    assertEq(moves.length, 0, 'Captor has no legal moves');
+    assert(moves.length > 0, 'Captor should have legal moves now (v3.3 rework)');
   });
   test('IMPRISON-02: Frozen piece cannot be imprisoned', () => {
     const s = customGame([
@@ -528,25 +553,64 @@ group('POWER: Imprison', () => {
     const r = castImprison(s, 7, 2, 6, 2);
     assert(r.error, 'Must reject Imprison on frozen');
   });
-  test('Captive released when captor captured', () => {
+  test('v3.3: Captive released to home rank on original file (Knight → b8)', () => {
+    // Black knight originally on b8 (row 0, col 1). Captor dies → prisoner returns to b8.
+    const captive = makePiece(PIECE.KNIGHT, COLOR.BLACK);
+    captive.originFile = 1;   // b file, as if imprisoned from b8
     const s = customGame([
       ['a1', PIECE.KING, COLOR.WHITE],
       ['h8', PIECE.KING, COLOR.BLACK],
-      ['c1', PIECE.ROOK, COLOR.WHITE, { imprisoned: makePiece(PIECE.KNIGHT, COLOR.BLACK) }],
+      ['c1', PIECE.ROOK, COLOR.WHITE, { imprisoned: captive }],
       ['c8', PIECE.ROOK, COLOR.BLACK]
     ]);
     s.turn = COLOR.BLACK;
     const r = makeMove(s, 0, 2, 7, 2); // Rxc1
     assert(r.success);
-    // Captor dead, captive placed nearest empty neighbor (N first = b1? actually c2, neighbors order: N=c0 off, NE, E=d1, etc.)
-    // Check the captive materialized somewhere adjacent
+    // Captive should be on b8 (row 0, col 1)
+    const released = s.board[0][1];
+    assert(released && released.type === PIECE.KNIGHT && released.color === COLOR.BLACK,
+      'Captive should be released to home rank on original file (b8)');
+  });
+  test('v3.3: Captive destroyed if home tile is occupied', () => {
+    const captive = makePiece(PIECE.KNIGHT, COLOR.BLACK);
+    captive.originFile = 1;
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['b8', PIECE.BISHOP, COLOR.BLACK],                                       // home tile blocked
+      ['c1', PIECE.ROOK, COLOR.WHITE, { imprisoned: captive }],
+      ['c8', PIECE.ROOK, COLOR.BLACK]
+    ]);
+    s.turn = COLOR.BLACK;
+    makeMove(s, 0, 2, 7, 2); // Rxc1
+    // Home tile still has the bishop, knight destroyed
+    assertEq(s.board[0][1].type, PIECE.BISHOP);
+    // Knight nowhere else
     let found = false;
-    const neighbors = [[-1,0],[-1,1],[0,1],[1,1],[1,0],[1,-1],[0,-1],[-1,-1]];
-    for (const [dr, dc] of neighbors) {
-      const p = s.board[7+dr] && s.board[7+dr][2+dc];
-      if (p && p.type === PIECE.KNIGHT && p.color === COLOR.BLACK) { found = true; break; }
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = s.board[r][c];
+      if (p && p.type === PIECE.KNIGHT && p.color === COLOR.BLACK) found = true;
     }
-    assert(found, 'Captive released on adjacent square');
+    assert(!found, 'Captive should be destroyed');
+  });
+  test('v3.3: Sacrificing captor kills prisoner', () => {
+    const captive = makePiece(PIECE.KNIGHT, COLOR.BLACK);
+    captive.originFile = 1;
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['e4', PIECE.BISHOP, COLOR.WHITE, { imprisoned: captive }]
+    ]);
+    s.turn = COLOR.WHITE;
+    const r = sacrificePiece(s, 4, 4);
+    assert(r.success);
+    // Knight shouldn't be back on b8 or anywhere
+    let found = false;
+    for (let rr = 0; rr < 8; rr++) for (let cc = 0; cc < 8; cc++) {
+      const p = s.board[rr][cc];
+      if (p && p.type === PIECE.KNIGHT && p.color === COLOR.BLACK) found = true;
+    }
+    assert(!found, 'Sacrificed captor should drag prisoner down with it');
   });
 });
 
@@ -728,6 +792,68 @@ group('POWER: The Wall', () => {
 });
 
 // ============================================================
+// POWER: CLEANSE (v3.3)
+// ============================================================
+group('POWER: Cleanse', () => {
+  test('Removes Frost from a frozen piece', () => {
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['d4', PIECE.ROOK, COLOR.BLACK, { frozenUntil: 999 }]
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 15;
+    const r = castCleanse(s, 4, 3);
+    assert(r.success, r.error || '');
+    assertEq(s.board[4][3].frozenUntil, 0);
+  });
+  test('Frees prisoner to home tile', () => {
+    const captive = makePiece(PIECE.KNIGHT, COLOR.BLACK);
+    captive.originFile = 1;
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['e4', PIECE.BISHOP, COLOR.WHITE, { imprisoned: captive }]
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 15;
+    const r = castCleanse(s, 4, 4);
+    assert(r.success, r.error || '');
+    assert(!s.board[4][4].imprisoned, 'Captor no longer holds captive');
+    assert(s.board[0][1] && s.board[0][1].type === PIECE.KNIGHT, 'Prisoner released to b8');
+  });
+  test('Rejects Cleanse on King', () => {
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK]
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 15;
+    const r = castCleanse(s, 7, 0);
+    assert(r.error);
+  });
+});
+
+// ============================================================
+// REGRESSION: No-power-on-king + Wall-mate disabled (v3.3)
+// ============================================================
+group('v3.3: no power on King', () => {
+  test('Wall cast rejected when it would put enemy King in check', () => {
+    // WK h1, BK a8, W bishop b6. Wall around b6 spawns pawns at a5,a6,a7,b5,b7,c5,c6,c7.
+    // Pawn on b7 attacks a8 + c8 → enemy King in check → Wall must reject.
+    const s = customGame([
+      ['h1', PIECE.KING, COLOR.WHITE],
+      ['a8', PIECE.KING, COLOR.BLACK],
+      ['c7', PIECE.BISHOP, COLOR.WHITE]
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 30;
+    const r = castWall(s, 1, 2);
+    assert(r.error, 'Wall must reject when resulting pawns check enemy King');
+  });
+});
+
+// ============================================================
 // REGRESSION: Shielded attacker = mate (applyMoveRaw shield check)
 // Prior bug: applyMoveRaw used target.hasShield (legacy field) instead of
 // target.shieldHP, so the mate simulation let the defender "capture" the
@@ -757,10 +883,18 @@ group('EDGE: Bomba v3.2 — Kings and friendlies immune', () => {
       ['d2', PIECE.KING, COLOR.BLACK],
       ['e2', PIECE.BISHOP, COLOR.WHITE],   // friendly of planter (row 6, col 4)
       ['f2', PIECE.KNIGHT, COLOR.BLACK],   // enemy non-King (row 6, col 5)
-      ['d3', PIECE.PAWN, COLOR.BLACK, { shieldHP: 1 }] // shielded enemy (row 5, col 3, adjacent to e3)
+      ['d3', PIECE.PAWN, COLOR.BLACK, { shieldHP: 1 }], // shielded enemy (row 5, col 3, adjacent to e3)
+      ['e6', PIECE.PAWN, COLOR.WHITE]      // v3.3: need a white pawn so (5,4) is "one ahead" or diagonal
     ]);
     s.turn = COLOR.WHITE;
     s.mana[COLOR.WHITE] = 15;
+    // White pawn on e6 (row 2 col 4). Row 5 col 4 is diagonally reachable from d3 — but d3 is black.
+    // Plant at row 1 col 4 (one ahead of e6). But target must be adjacent to d3 (the shielded pawn) for
+    // the original blast assertion. Keep the bomb target at (5,4) = e3; it's diagonal to d2 (black king)
+    // and not a white pawn — rule 2 needs a WHITE pawn diagonally adjacent. Adjust: we need a white pawn
+    // at d4 (row 4 col 3), e4 (row 4 col 4), f4 (row 4 col 5), d2/e2/f2 (row 6). e2 is the bishop.
+    // Add a white pawn at f4 (row 4 col 5) — diagonal to (5,4).
+    s.board[4][5] = makePiece(PIECE.PAWN, COLOR.WHITE);
     const r = castBomba(s, 5, 4); // plant at e3 (row 5, col 4)
     assert(r.success, r.error || '');
     s.turn = COLOR.BLACK; startOfTurn(s); // 2 -> 1

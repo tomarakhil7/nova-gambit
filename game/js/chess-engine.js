@@ -327,8 +327,7 @@ function legalMoves(board, r, c, gameState) {
   if (piece.frozenUntil && gameState && piece.frozenUntil > gameState.turnNumber) return [];
   // Spectral pawns cannot move (ever).
   if (piece.isSpectral) return [];
-  // Captor pieces cannot move while holding a captive.
-  if (piece.imprisoned) return [];
+  // v3.3: Captors CAN move while holding a prisoner.
   const pseudo = pseudoLegalMoves(board, r, c, gameState);
   return pseudo.filter(move => {
     // Phase Shift: cannot land on own King or enemy King
