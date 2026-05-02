@@ -35,7 +35,7 @@ const PORT = process.env.PORT || 8765;
 const CLIENT_DIR = path.join(__dirname, '..', 'game');
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
 const ROOM_CODE_LEN = 5;
-const DISCONNECT_GRACE_MS = 120_000;  // 2 minutes — absorb backgrounded-tab gaps
+const DISCONNECT_GRACE_MS = 5 * 60_000;  // 5 minutes — backgrounded tabs & flaky wifi
 const IDLE_ROOM_TTL_MS = 10 * 60_000;
 const RATE_LIMIT = { WINDOW_MS: 10_000, MAX: 30 };
 
@@ -232,8 +232,20 @@ function startClock(room) {
 function stopClock(room) {
   if (room.clock.intervalId) { clearInterval(room.clock.intervalId); room.clock.intervalId = null; }
 }
+// Clock is paused whenever any player is disconnected, so a player with a
+// flaky connection or a backgrounded tab doesn't bleed time and lose abruptly.
+function anyPlayerDisconnected(room) {
+  return (room.players.w && !room.players.w.connected) ||
+         (room.players.b && !room.players.b.connected);
+}
+
 function tickClock(room) {
   if (!room.clock.running || room.clock.paused || room.state.winner) return;
+  if (anyPlayerDisconnected(room)) {
+    // Freeze the reference time so we don't accumulate the paused window on next tick.
+    room.clock.lastTickTime = Date.now();
+    return;
+  }
   const now = Date.now();
   const elapsed = (now - room.clock.lastTickTime) / 1000;
   room.clock.lastTickTime = now;
@@ -401,6 +413,9 @@ function handleJoinRoom(ws, msg) {
         p.connected = true;
         p.name = (msg.name || p.name).slice(0, 20);
         socketToPlayer.set(ws, { roomCode: code, color, sessionToken: p.sessionToken });
+        // Reset the clock's reference time so the next tick doesn't retroactively
+        // charge the player for the paused window.
+        if (room.clock) room.clock.lastTickTime = Date.now();
         broadcastRoomState(room, { event: 'RECONNECTED', color });
         return;
       }
@@ -453,12 +468,19 @@ function handleLeaveRoom(ws) {
   } else {
     const p = room.players[info.color];
     if (p) p.connected = false;
-    // Grace period for reconnect
+    // Freeze the clock immediately — anyPlayerDisconnected() now returns true, but we
+    // also reset lastTickTime so the next tick doesn't bill them for the gap before
+    // the pause took effect.
+    if (room.clock) room.clock.lastTickTime = Date.now();
+    // Grace period for reconnect.
+    // Only award win to the other player if THEY are still connected — otherwise both
+    // are gone (e.g., server hiccup) and whoever reconnects first deserves the game back.
     room.disconnectTimers[info.color] = setTimeout(() => {
-      // Abandon if still gone
       if (p && !p.connected) {
-        if (room.status === 'PLAYING' && !room.state.winner) {
-          room.state.winner = info.color === 'w' ? 'b' : 'w';
+        const otherColor = info.color === 'w' ? 'b' : 'w';
+        const other = room.players[otherColor];
+        if (room.status === 'PLAYING' && !room.state.winner && other && other.connected) {
+          room.state.winner = otherColor;
           room.state.winReason = 'DISCONNECT';
           room.state.log.push(`${info.color === 'w' ? 'White' : 'Black'} abandoned the game`);
           room.status = 'FINISHED';
@@ -495,7 +517,8 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   ws._rateBucket = { count: 0, reset: Date.now() + RATE_LIMIT.WINDOW_MS };
   ws.isAlive = true;
-  ws.on('pong', () => { ws.isAlive = true; });
+  ws.missedPongs = 0;
+  ws.on('pong', () => { ws.isAlive = true; ws.missedPongs = 0; });
 
   ws.on('message', (raw) => {
     // Rate limit
@@ -535,12 +558,18 @@ wss.on('connection', (ws) => {
   ws.on('error', (e) => console.error('WS error:', e.message));
 });
 
-// WebSocket heartbeat: ping every 30s, terminate sockets that didn't pong back.
-// This lets us detect half-open connections (idle browser, flaky network) and
-// fire the close handler so the disconnect-grace timer can start.
+// WebSocket heartbeat: ping every 30s. Only terminate sockets that missed
+// TWO consecutive pongs (≈60s silence) — tolerates transient network hiccups
+// and avoids false positives from backgrounded tabs that briefly pause I/O.
 setInterval(() => {
   wss.clients.forEach((ws) => {
-    if (ws.isAlive === false) { try { ws.terminate(); } catch {} return; }
+    if (ws.isAlive === false) {
+      ws.missedPongs = (ws.missedPongs || 0) + 1;
+      if (ws.missedPongs >= 2) {
+        try { ws.terminate(); } catch {}
+        return;
+      }
+    }
     ws.isAlive = false;
     try { ws.ping(); } catch {}
   });
