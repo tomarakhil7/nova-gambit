@@ -1553,9 +1553,9 @@ function handlePowerClick(r, c) {
     const a = UI.powerState.attacker, f = UI.powerState.first;
     if (netInterceptPower('DOUBLE_ATTACK', { from: a, to: f, jump: { r, c } })) return;
     pauseClockForAnimation(1400);
-    const res = castChainLightning(UI.state, a.r, a.c, f.r, f.c, r, c);
+    const res = castDoubleAttack(UI.state, a.r, a.c, f.r, f.c, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.powerState = {}; render(); return; }
-    setStatus('Chain Lightning!', 'ok');
+    setStatus('Double Attack!', 'ok');
     playVfxChain(a.r, a.c, f.r, f.c);
     setTimeout(() => playVfxChain(f.r, f.c, r, c), 300);
     UI.activePower = null; UI.powerState = {};
@@ -1631,18 +1631,19 @@ function computePowerTargets() {
       const rankFromPerspective = color === COLOR.WHITE ? (8 - r) : (r + 1);
       if (rankFromPerspective >= 1 && rankFromPerspective <= 4) targets.push({r,c});
     }
-  } else if (p === POWER.GHOST) {
-    if (!UI.powerState.src) {
-      for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
-        const piece = UI.state.board[r][c];
-        if (piece && piece.color === color && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
-      }
-    } else {
-      // Any square (reachable validated in cast)
-      for (let r=0;r<8;r++) for (let c=0;c<8;c++) targets.push({r,c});
+  } else if (p === POWER.CLEANSE) {
+    // Any piece that has Imprison or Frost (own or enemy), never King.
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
+      const piece = UI.state.board[r][c];
+      if (!piece || piece.type === PIECE.KING) continue;
+      const hasFrost = piece.frozenUntil && piece.frozenUntil > UI.state.turnNumber;
+      if (hasFrost || piece.imprisoned) targets.push({r, c});
     }
   } else if (p === POWER.BOMBA) {
-    for (let r=0;r<8;r++) for (let c=0;c<8;c++) if (!UI.state.board[r][c]) targets.push({r,c});
+    for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
+      if (UI.state.board[r][c]) continue;
+      if (validBombaTarget(UI.state, color, r, c)) targets.push({r, c});
+    }
   } else if (p === POWER.IMPRISON) {
     if (!UI.powerState.captor) {
       for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
