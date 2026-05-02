@@ -441,6 +441,56 @@ group('POWER: Double Attack', () => {
     // h1 has own King, so illegal — error is acceptable.
     assert(r.success || r.error);
   });
+  test('Move-then-capture: W Rook moves, then captures enemy', () => {
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['d1', PIECE.ROOK, COLOR.WHITE],     // rook at d1 (row 7, col 3)
+      ['d5', PIECE.KNIGHT, COLOR.BLACK]    // enemy knight at d5 (row 3, col 3)
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 20;
+    // Step 1: d1 → d3 (non-capture move). Step 2: d3 → d5 (captures knight).
+    const r = castDoubleAttack(s, 7, 3, 5, 3, 3, 3);
+    assert(r.success, r.error || '');
+    // Rook should be on d5 now; knight gone.
+    const landing = s.board[3][3];
+    assert(landing && landing.type === PIECE.ROOK && landing.color === COLOR.WHITE, 'Rook lands on d5');
+    assert(!s.board[5][3], 'd3 is empty after the rook moved on');
+  });
+  test('Capture-then-move: W Knight captures, then repositions', () => {
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['d4', PIECE.KNIGHT, COLOR.WHITE],   // knight at d4 (row 4, col 3)
+      ['e6', PIECE.PAWN, COLOR.BLACK]      // enemy pawn at e6 (row 2, col 4)
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 20;
+    // Step 1: d4 → e6 (captures pawn). Step 2: e6 → f4 (non-capture move, reposition).
+    // Knight e6 to f4 = (2,4) → (4,5) — valid knight L.
+    const r = castDoubleAttack(s, 4, 3, 2, 4, 4, 5);
+    assert(r.success, r.error || '');
+    assertEq(s.board[4][5] && s.board[4][5].type, PIECE.KNIGHT);
+    assert(!s.board[2][4], 'Pawn captured');
+  });
+  test('Capture-then-capture: same piece takes two enemies', () => {
+    // White Queen at d1, two black pawns: d5 and h5 (both on rank 4).
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['d1', PIECE.QUEEN, COLOR.WHITE],
+      ['d5', PIECE.PAWN, COLOR.BLACK],
+      ['h5', PIECE.PAWN, COLOR.BLACK]
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 20;
+    // Step 1: Qd1 → d5 (captures). Step 2: Qd5 → h5 (captures).
+    const r = castDoubleAttack(s, 7, 3, 3, 3, 3, 7);
+    assert(r.success, r.error || '');
+    assert(!s.board[3][3], 'd5 pawn gone (queen moved on)');
+    assert(s.board[3][7] && s.board[3][7].type === PIECE.QUEEN, 'Queen on h5');
+  });
 });
 
 // ============================================================

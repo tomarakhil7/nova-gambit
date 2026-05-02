@@ -133,12 +133,12 @@ const POWER_DETAILS = {
     counter: 'Step any piece onto the bomb to defuse it. Fortify a threatened piece.'
   },
   [POWER.DOUBLE_ATTACK]: {
-    targeting: 'Your piece → 2 legal moves in sequence',
-    duration: 'Instant — both moves happen, attacker ends on the 2nd destination',
+    targeting: 'Your piece → two actions (move or capture) in sequence',
+    duration: 'Instant — the piece ends on its second destination',
     turnEnds: 'Yes',
-    canMate: 'No',
-    restrictions: 'Both moves must be independently legal. Cannot target King. Cannot deliver mate. Shields fizzle captures normally.',
-    useCase: 'Two-for-one trades. Reposition a Knight deep for tempo.',
+    canMate: 'No — engine rejects any sequence that mates',
+    restrictions: 'Either step can be a move or a capture. Both must be independently legal for that piece. Neither step can target the King. Cannot leave your own King in check at any point. Shields fizzle captures the normal way.',
+    useCase: 'Capture twice for a free two-for-one. Capture then reposition deep. Move then capture for an unexpected angle.',
     counter: 'Keep high-value pieces defended twice. Fortify the likely first target.'
   },
   [POWER.IMPRISON]: {
@@ -1544,11 +1544,11 @@ function handlePowerClick(r, c) {
       if (!piece || piece.color !== UI.state.turn) { setStatus('Select attacker (your piece, not King).', 'warn'); return; }
       if (piece.type === PIECE.KING) { setStatus('Double Attack cannot target the King.', 'err'); return; }
       UI.powerState.attacker = { r, c };
-      setStatus('Select the FIRST destination (any legal move for this piece).', 'ok'); render(); return;
+      setStatus('Step 1 — pick a square to move to OR an enemy to capture.', 'ok'); render(); return;
     }
     if (!UI.powerState.first) {
       UI.powerState.first = { r, c };
-      setStatus('Select the SECOND destination (legal from the first landing).', 'ok'); render(); return;
+      setStatus('Step 2 — pick another move or capture from the new square.', 'ok'); render(); return;
     }
     const a = UI.powerState.attacker, f = UI.powerState.first;
     if (netInterceptPower('DOUBLE_ATTACK', { from: a, to: f, jump: { r, c } })) return;
