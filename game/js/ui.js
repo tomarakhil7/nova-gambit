@@ -2301,9 +2301,10 @@ function openBotModal() {
         <div class="lobby-row">
           <label>Speed</label>
           <select id="bot-speed">
-            <option value="instant">Instant (max speed)</option>
-            <option value="fast">Fast (testing)</option>
-            <option value="normal" selected>Normal (watch)</option>
+            <option value="instant">Instant (skip to result)</option>
+            <option value="blitz" selected>Blitz (fast watch)</option>
+            <option value="fast">Fast</option>
+            <option value="normal">Normal</option>
             <option value="slow">Slow (study)</option>
           </select>
         </div>

@@ -902,8 +902,9 @@ function botCheckTurn() {
   if (BOT.thinking) return;
   // In bot-vs-bot, always trigger; in single-bot, only on bot's color
   if (!BOT.botVsBot && UI.state.turn !== BOT.color) return;
-  // Small extra delay to let the UI update first
-  setTimeout(() => botPlay(), 100);
+  // Minimal delay in bot-vs-bot (just enough for a paint frame), longer for human watching
+  const uiDelay = BOT.botVsBot ? 16 : 100;
+  setTimeout(() => botPlay(), uiDelay);
 }
 
 // ---------- Bot Setup ----------
@@ -944,7 +945,8 @@ function botVsBotStart(opts = {}) {
   BOT.onGameEnd = opts.onGameEnd || null;
 
   // Speed presets
-  BOT.thinkDelay = speed === 'instant' ? 10 : speed === 'fast' ? 50 : speed === 'slow' ? 1200 : 300;
+  // Speed presets: instant (no visual), blitz (quick but watchable), fast, normal, slow
+  BOT.thinkDelay = speed === 'instant' ? 1 : speed === 'blitz' ? 80 : speed === 'fast' ? 150 : speed === 'slow' ? 800 : 300;
 
   console.log(`[bot-vs-bot] Starting ${numGames} game(s): White=${whiteDiff} vs Black=${blackDiff} (speed: ${speed})`);
 
@@ -1009,7 +1011,7 @@ function botVsBotGameEnd() {
 
   // Check if more games to play
   if (BOT.gameCount < BOT.maxGames) {
-    setTimeout(() => botVsBotNewGame(), BOT.thinkDelay * 3);
+    setTimeout(() => botVsBotNewGame(), Math.max(200, BOT.thinkDelay * 2));
   } else {
     console.log(`[bot-vs-bot] Series complete: W:${BOT.results.white} B:${BOT.results.black} D:${BOT.results.draw}`);
     if (typeof setStatus === 'function') {
