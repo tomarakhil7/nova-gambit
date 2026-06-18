@@ -350,21 +350,18 @@ function botEvaluate(state, forColor) {
     }
   }
 
-  // ===== PIECE CONNECTIVITY =====
-  // Bonus for pieces that defend each other (better coordination)
+  // ===== PIECE CONNECTIVITY (lightweight) =====
+  // Only in middlegame: bonus for knights/bishops NOT on edges (more active)
   if (phase > 0.4) {
-    let myConnected = 0, oppConnected = 0;
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
-      if (!p || p.isSpectral || p.type === PIECE.KING || p.type === PIECE.PAWN) continue;
-      if (p.color === forColor) {
-        if (isSquareAttacked(state.board, r, c, forColor)) myConnected++;
-      } else {
-        if (isSquareAttacked(state.board, r, c, opp)) oppConnected++;
-      }
+      if (!p || p.isSpectral) continue;
+      if (p.type !== PIECE.KNIGHT && p.type !== PIECE.BISHOP) continue;
+      // Central minors are more active (no isSquareAttacked needed — use position as proxy)
+      const centralBonus = (r >= 2 && r <= 5 && c >= 2 && c <= 5) ? 15 : 0;
+      if (p.color === forColor) score += centralBonus;
+      else score -= centralBonus;
     }
-    score += myConnected * 12;
-    score -= oppConnected * 12;
   }
 
   // ===== BISHOP PAIR BONUS =====
@@ -393,33 +390,25 @@ function botEvaluate(state, forColor) {
     else score -= bonus;
   }
 
-  // ===== HANGING PIECE PENALTY =====
-  // Penalize pieces that are attacked and not adequately defended.
-  // This is THE most important tactical pattern — prevents blunders like Nc2 walking into Kxc2.
+  // ===== HANGING PIECE PENALTY (lightweight) =====
+  // Only check QUEENS and ROOKS (high-value targets worth the isSquareAttacked cost).
+  // Minor pieces are handled by the 3-ply search + quiescence (opponent captures them).
   for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
     const p = state.board[r][c];
     if (!p || p.isSpectral || p.type === PIECE.KING) continue;
-    if (p.shieldHP > 0) continue; // shielded pieces are safe
+    if (p.shieldHP > 0) continue;
     const val = BOT_PIECE_VALUES[p.type];
-    if (val <= 100) continue; // don't bother with pawns (too slow to check all)
+    if (val < 500) continue; // Only Rook (500) and Queen (900)
     if (p.color === forColor) {
-      // Is our piece attacked by opponent?
       if (isSquareAttacked(state.board, r, c, opp)) {
-        // Is it defended by us?
         if (!isSquareAttacked(state.board, r, c, forColor)) {
-          score -= val * 0.6; // Undefended and attacked = likely to be captured
-        } else {
-          // Defended but attacked — if attacked by a less valuable piece, still bad
-          score -= val * 0.1; // Slight tension penalty
+          score -= val * 0.5; // Hanging rook/queen = disaster
         }
       }
     } else {
-      // Is opponent's piece attacked by us?
       if (isSquareAttacked(state.board, r, c, forColor)) {
         if (!isSquareAttacked(state.board, r, c, opp)) {
-          score += val * 0.6; // Opponent has a hanging piece we can take
-        } else {
-          score += val * 0.1;
+          score += val * 0.5; // We can take their rook/queen
         }
       }
     }
