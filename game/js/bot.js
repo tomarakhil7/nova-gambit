@@ -21,6 +21,26 @@ const BOT = {
   onGameEnd: null    // callback(result) for headless mode
 };
 
+// Move history for repetition avoidance
+const BOT_MOVE_HISTORY = [];
+const BOT_HISTORY_MAX = 12; // track last 12 half-moves
+
+function botRecordMove(from, to) {
+  BOT_MOVE_HISTORY.push(`${from.r}${from.c}${to.r}${to.c}`);
+  if (BOT_MOVE_HISTORY.length > BOT_HISTORY_MAX) BOT_MOVE_HISTORY.shift();
+}
+
+function botMoveRepeatCount(from, to) {
+  const key = `${from.r}${from.c}${to.r}${to.c}`;
+  let count = 0;
+  for (const h of BOT_MOVE_HISTORY) if (h === key) count++;
+  return count;
+}
+
+function botClearHistory() {
+  BOT_MOVE_HISTORY.length = 0;
+}
+
 // Piece values for move evaluation
 const BOT_PIECE_VALUES = {
   P: 100, N: 320, B: 330, R: 500, Q: 900, K: 20000
@@ -270,7 +290,74 @@ function botEvaluate(state, forColor) {
         if (p && p.type === PIECE.PAWN && p.color === forColor) shieldPawns++;
       }
     }
-    score += shieldPawns * 15;
+    score += shieldPawns * 20;
+    // Penalize king on open file (no own pawn on same file)
+    let ownPawnOnFile = false;
+    for (let scanR = 0; scanR < 8; scanR++) {
+      const p = state.board[scanR][myKingPos.c];
+      if (p && p.type === PIECE.PAWN && p.color === forColor) { ownPawnOnFile = true; break; }
+    }
+    if (!ownPawnOnFile) score -= 30;
+  }
+
+  // ===== OPPONENT KING SAFETY (exploit weakness) =====
+  if (phase > 0.5 && oppKingPos) {
+    let oppShieldPawns = 0;
+    const oppKDir = opp === COLOR.WHITE ? -1 : 1;
+    for (let dc = -1; dc <= 1; dc++) {
+      const pr = oppKingPos.r + oppKDir, pc = oppKingPos.c + dc;
+      if (inBounds(pr, pc)) {
+        const p = state.board[pr][pc];
+        if (p && p.type === PIECE.PAWN && p.color === opp) oppShieldPawns++;
+      }
+    }
+    // Reward attacking positions when opponent king is exposed
+    if (oppShieldPawns < 2) score += (2 - oppShieldPawns) * 25;
+  }
+
+  // ===== PIECE ACTIVITY / DEVELOPMENT =====
+  // Penalize undeveloped minor pieces in the opening (still on back rank)
+  if (phase > 0.7) {
+    const backRank = forColor === COLOR.WHITE ? 7 : 0;
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[backRank][c];
+      if (p && p.color === forColor && (p.type === PIECE.KNIGHT || p.type === PIECE.BISHOP)) {
+        score -= 25; // penalty for undeveloped minor piece
+      }
+    }
+    const oppBackRank = opp === COLOR.WHITE ? 7 : 0;
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[oppBackRank][c];
+      if (p && p.color === opp && (p.type === PIECE.KNIGHT || p.type === PIECE.BISHOP)) {
+        score += 25; // reward opponent being undeveloped
+      }
+    }
+  }
+
+  // ===== BISHOP PAIR BONUS =====
+  let myBishops = 0, oppBishops = 0;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (p && p.type === PIECE.BISHOP && !p.isSpectral) {
+      if (p.color === forColor) myBishops++;
+      else oppBishops++;
+    }
+  }
+  if (myBishops >= 2) score += 40;
+  if (oppBishops >= 2) score -= 40;
+
+  // ===== ROOK ON OPEN FILE =====
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (!p || p.type !== PIECE.ROOK || p.isSpectral) continue;
+    let pawnsOnFile = 0;
+    for (let scanR = 0; scanR < 8; scanR++) {
+      const fp = state.board[scanR][c];
+      if (fp && fp.type === PIECE.PAWN && !fp.isSpectral) pawnsOnFile++;
+    }
+    const bonus = pawnsOnFile === 0 ? 30 : pawnsOnFile === 1 ? 15 : 0;
+    if (p.color === forColor) score += bonus;
+    else score -= bonus;
   }
 
   return score;
@@ -355,79 +442,158 @@ function botCountMaterial(state, color) {
   return total;
 }
 
-// ---------- 1-Ply Search (Hard mode) ----------
-// PERFORMANCE OPTIMIZED: Pre-scores all moves cheaply, then only does full 1-ply
-// evaluation on the top candidates. This prevents the O(N*M) blowup that was causing
-// hard-vs-hard to take minutes per move in the browser.
-const BOT_SEARCH_CANDIDATES = 10; // Only deep-eval the top N moves (was ALL moves before)
+// ---------- Alpha-Beta Search (Hard mode) ----------
+// 2-ply with alpha-beta pruning + quiescence on captures.
+// Fast enough for browser: move ordering ensures early cutoffs, and we limit
+// the candidate set at the root to keep wall-clock under ~200ms.
+const BOT_SEARCH_DEPTH = 2; // 2-ply = my move + opponent's best response
+const BOT_ROOT_CANDIDATES = 12; // Only deep-search the top N root moves
 
-function botSearchBestMove(state, moves, forColor) {
+// Quick move-ordering score (no board copies — pure heuristics)
+function botOrderScore(state, m, forColor) {
+  let s = 0;
+  const piece = state.board[m.from.r][m.from.c];
+  const target = state.board[m.to.r][m.to.c];
+  // MVV-LVA for captures
+  if (target && target.color !== piece.color) {
+    s += 10000 + BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
+  }
+  // Promotions
+  if (piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) s += 9000;
+  // PST improvement
+  const phase = botGamePhase(state);
+  s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
+  // King aggression in endgame
+  if (phase < 0.5 && piece.type !== PIECE.KING) {
+    const oppKing = findKing(state.board, opposite(forColor));
+    if (oppKing) {
+      const dist = Math.abs(m.to.r - oppKing.r) + Math.abs(m.to.c - oppKing.c);
+      if (dist <= 2) s += 300;
+    }
+  }
+  return s;
+}
+
+// Negamax with alpha-beta pruning
+function botNegamax(state, depth, alpha, beta, forColor) {
   const opp = opposite(forColor);
-  let bestMove = null, bestScore = -Infinity;
 
-  // Step 1: Quick-score all moves (cheap — no board copies needed for most)
-  const scored = [];
-  for (const m of moves) {
-    let quickScore = botScoreMove(state, m.from, m.to, forColor);
-    // Bonus for captures (prioritize examining these)
-    if (m.move.capture) quickScore += 500;
-    // Bonus for promotions
-    const piece = state.board[m.from.r][m.from.c];
-    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) quickScore += 2000;
-    scored.push({ m, quickScore });
+  // Terminal check
+  if (depth === 0) {
+    return botQuiesce(state, alpha, beta, forColor);
   }
 
-  // Sort by quick score descending
-  scored.sort((a, b) => b.quickScore - a.quickScore);
+  const moves = allLegalMoves(state.board, forColor, state);
 
-  // Step 2: Deep evaluation of top N candidates only
-  const candidates = scored.slice(0, Math.min(BOT_SEARCH_CANDIDATES, scored.length));
+  // Checkmate / stalemate
+  if (moves.length === 0) {
+    if (isInCheck(state.board, forColor)) return -99999 + (BOT_SEARCH_DEPTH - depth); // Checkmate (prefer faster mates)
+    return 0; // Stalemate
+  }
+
+  // Move ordering: captures & promotions first, then by heuristic
+  moves.sort((a, b) => botOrderScore(state, b, forColor) - botOrderScore(state, a, forColor));
+
+  for (const m of moves) {
+    const snap = snapshot(state.board);
+    const piece = state.board[m.from.r][m.from.c];
+    const moveInfo = { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant };
+    applyMoveRaw(state.board, m.from.r, m.from.c, moveInfo, state);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+      state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
+    }
+
+    const score = -botNegamax(state, depth - 1, -beta, -alpha, opp);
+    restore(state.board, snap);
+
+    if (score >= beta) return beta; // Beta cutoff
+    if (score > alpha) alpha = score;
+  }
+
+  return alpha;
+}
+
+// Quiescence search: only evaluate captures to avoid horizon effect
+function botQuiesce(state, alpha, beta, forColor) {
+  const standPat = botEvaluate(state, forColor);
+  if (standPat >= beta) return beta;
+  if (standPat > alpha) alpha = standPat;
+
+  // Generate only captures
+  const opp = opposite(forColor);
+  const moves = allLegalMoves(state.board, forColor, state);
+  const captures = moves.filter(m => m.move.capture);
+
+  // Sort captures by MVV-LVA
+  captures.sort((a, b) => {
+    const aVal = state.board[a.to.r][a.to.c] ? BOT_PIECE_VALUES[state.board[a.to.r][a.to.c].type] : 0;
+    const bVal = state.board[b.to.r][b.to.c] ? BOT_PIECE_VALUES[state.board[b.to.r][b.to.c].type] : 0;
+    return bVal - aVal;
+  });
+
+  // Only look at top captures (limit for speed)
+  const topCaptures = captures.slice(0, 5);
+
+  for (const m of topCaptures) {
+    const snap = snapshot(state.board);
+    const piece = state.board[m.from.r][m.from.c];
+    const moveInfo = { r: m.to.r, c: m.to.c, capture: true, castle: m.move.castle, enPassant: m.move.enPassant };
+    applyMoveRaw(state.board, m.from.r, m.from.c, moveInfo, state);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+      state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
+    }
+
+    const score = -botQuiesce(state, -beta, -alpha, opp);
+    restore(state.board, snap);
+
+    if (score >= beta) return beta;
+    if (score > alpha) alpha = score;
+  }
+
+  return alpha;
+}
+
+// Root-level search: picks the best move using iterative candidate pruning
+function botSearchBestMove(state, moves, forColor) {
+  const opp = opposite(forColor);
+
+  // Quick-score all moves for ordering
+  const scored = moves.map(m => ({ m, s: botOrderScore(state, m, forColor) }));
+  scored.sort((a, b) => b.s - a.s);
+
+  // Only deep-search the top candidates
+  const candidates = scored.slice(0, Math.min(BOT_ROOT_CANDIDATES, scored.length));
+
+  let bestMove = candidates[0].m;
+  let bestScore = -Infinity;
+  let alpha = -Infinity;
+  const beta = Infinity;
 
   for (const { m } of candidates) {
     const snap = snapshot(state.board);
     const piece = state.board[m.from.r][m.from.c];
     const moveInfo = { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant };
     applyMoveRaw(state.board, m.from.r, m.from.c, moveInfo, state);
-
-    // Handle pawn promotion in simulation
     if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
       state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
     }
 
-    // Check for checkmate/stalemate (only when relevant)
-    const oppInCheck = isInCheck(state.board, opp);
-    if (oppInCheck) {
-      // Giving check — see if it's checkmate (only need allLegalMoves here)
-      if (allLegalMoves(state.board, opp, state).length === 0) {
-        restore(state.board, snap);
-        return m; // Instant checkmate!
-      }
-    } else {
-      // Only check for stalemate if we're ahead (expensive call, skip otherwise)
-      const myMat = botCountMaterial(state, forColor);
-      const oppMat = botCountMaterial(state, opp);
-      if (myMat > oppMat + 100) {
-        if (allLegalMoves(state.board, opp, state).length === 0) {
-          restore(state.board, snap);
-          const stalScore = -5000;
-          if (stalScore > bestScore) { bestScore = stalScore; bestMove = m; }
-          continue;
-        }
-      }
-    }
-
-    // Evaluate the resulting position
-    let evalScore = botEvaluate(state, forColor);
-
+    // 2-ply: evaluate from opponent's perspective (negated)
+    let score = -botNegamax(state, BOT_SEARCH_DEPTH - 1, -beta, -alpha, opp);
     restore(state.board, snap);
 
-    if (evalScore > bestScore) {
-      bestScore = evalScore;
+    // Repetition penalty: heavily discourage repeating the same move
+    const repeats = botMoveRepeatCount(m.from, m.to);
+    if (repeats > 0) score -= repeats * 150;
+
+    if (score > bestScore) {
+      bestScore = score;
       bestMove = m;
     }
+    if (score > alpha) alpha = score;
   }
 
-  return bestMove || moves[0];
+  return bestMove;
 }
 
 // ---------- Power Decision ----------
@@ -714,9 +880,19 @@ function botConsiderPowers(state, forColor) {
     return candidates[0];
   }
 
-  // Hard: always use the best power if priority is good
-  if (candidates[0].priority < 20) return null;
-  return candidates[0];
+  // Hard: always use the best power if priority is decent
+  // But don't waste aether on low-value powers when saving for Vengeance/Promote
+  const best = candidates[0];
+  if (best.priority < 15) return null;
+  // If we're close to affording a game-changing power, don't waste on small ones
+  const aetherNow = state.mana[forColor];
+  const almostVengeance = aetherNow >= POWER_COSTS[POWER.VENGEANCE] - 4;
+  const almostPromote = aetherNow >= POWER_COSTS[POWER.PROMOTE] - 3;
+  if ((almostVengeance || almostPromote) && best.priority < 50) {
+    // Only cast if it's the big power we're saving for
+    if (best.name !== 'VENGEANCE' && best.name !== 'PROMOTE') return null;
+  }
+  return best;
 }
 
 // ---------- Sacrifice Decision ----------
@@ -726,52 +902,159 @@ function botConsiderSacrifice(state, forColor) {
 
   const aether = state.mana[forColor];
   const phase = botGamePhase(state);
+  const opp = opposite(forColor);
 
-  // In endgame with material advantage, sacrifice more aggressively to fund Vengeance
+  // HARD MODE: only sacrifice when it DIRECTLY enables a high-impact power THIS TURN
+  if (BOT.difficulty === 'hard') {
+    // Never sacrifice if already have enough for the best available power
+    if (aether >= POWER_COSTS[POWER.VENGEANCE]) return null;
+    // Only sacrifice in endgame when clearly ahead and close to affording Vengeance/Promote
+    const myMat = botCountMaterial(state, forColor);
+    const oppMat = botCountMaterial(state, opp);
+    if (myMat - oppMat < 300) return null; // must be significantly ahead to sacrifice
+    // Only sacrifice if it gets us to Vengeance or Promote threshold
+    const neededForVengeance = POWER_COSTS[POWER.VENGEANCE] - aether;
+    const neededForPromote = POWER_COSTS[POWER.PROMOTE] - aether;
+    // Only sacrifice pawns (never pieces) and only far-from-promo pawns
+    let bestSac = null;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color !== forColor || p.type !== PIECE.PAWN || p.isSpectral) continue;
+      const distToPromo = forColor === COLOR.WHITE ? r : (7 - r);
+      if (distToPromo <= 3) continue; // don't sac pawns that are advancing well
+      bestSac = { r, c };
+      break; // just need one pawn
+    }
+    if (!bestSac) return null;
+    const gain = SACRIFICE_VALUES[state.board[bestSac.r][bestSac.c].type];
+    const afterAether = Math.min(AETHER_CAP, aether + gain);
+    // Only sacrifice if it reaches Vengeance or Promote threshold
+    if (afterAether < Math.min(neededForVengeance <= gain ? POWER_COSTS[POWER.VENGEANCE] : Infinity,
+                               neededForPromote <= gain ? POWER_COSTS[POWER.PROMOTE] : Infinity)) {
+      // Actually simpler: does afterAether reach vengeance or promote cost?
+      if (afterAether < POWER_COSTS[POWER.PROMOTE]) return null;
+    }
+    // Only 30% chance even when conditions are met (don't spam)
+    if (Math.random() > 0.3) return null;
+    return bestSac;
+  }
+
+  // EASY/MEDIUM: original logic
   const aetherCap = phase < 0.5 ? 20 : 15;
-  if (aether >= aetherCap) return null; // already rich enough
+  if (aether >= aetherCap) return null;
 
-  // Find the least valuable piece we'd be willing to sacrifice
   let bestSac = null, bestCost = Infinity;
   for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
     const p = state.board[r][c];
     if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
-    // Don't sacrifice queens or rooks lightly (unless hard+endgame)
-    if (BOT.difficulty !== 'hard' && (p.type === PIECE.QUEEN || p.type === PIECE.ROOK)) continue;
-    if (BOT.difficulty === 'hard' && phase > 0.5 && p.type === PIECE.QUEEN) continue;
+    if (p.type === PIECE.QUEEN || p.type === PIECE.ROOK) continue;
     const val = BOT_PIECE_VALUES[p.type];
-    // Only sacrifice pawns that aren't about to promote
     if (p.type === PIECE.PAWN) {
       const distToPromo = forColor === COLOR.WHITE ? r : (7 - r);
-      if (distToPromo <= 2) continue; // don't sac advanced pawns
+      if (distToPromo <= 2) continue;
     }
-    if (val < bestCost) {
-      bestCost = val;
-      bestSac = { r, c };
-    }
+    if (val < bestCost) { bestCost = val; bestSac = { r, c }; }
   }
 
   if (!bestSac) return null;
 
-  // Heuristic: sacrifice if the aether gain would let us cast something useful
   const gain = SACRIFICE_VALUES[state.board[bestSac.r][bestSac.c].type];
   const afterAether = Math.min(AETHER_CAP, aether + gain);
-
-  // In endgame: target Vengeance (18) or Promote (15). In middlegame: Frost (4).
-  const usefulThreshold = phase < 0.5
-    ? POWER_COSTS[POWER.PROMOTE]  // 15 — aim for Promote or Vengeance
-    : (BOT.difficulty === 'hard' ? POWER_COSTS[POWER.FROST] : POWER_COSTS[POWER.BLINK]);
+  const usefulThreshold = phase < 0.5 ? POWER_COSTS[POWER.PROMOTE] : POWER_COSTS[POWER.BLINK];
   if (afterAether < usefulThreshold) return null;
 
-  // More willing to sacrifice in endgame when ahead (faster win)
-  const myMat = botCountMaterial(state, forColor);
-  const oppMat = botCountMaterial(state, opposite(forColor));
-  const aheadBonus = (myMat - oppMat > 300 && phase < 0.5) ? 0.3 : 0;
-
-  const chance = BOT.difficulty === 'easy' ? 0.1 : BOT.difficulty === 'medium' ? 0.25 : (0.5 + aheadBonus);
+  const chance = BOT.difficulty === 'easy' ? 0.1 : 0.25;
   if (Math.random() > chance) return null;
-
   return bestSac;
+}
+
+// ---------- Emergency Escape (when in check with no legal moves) ----------
+// Tries powers that can resolve a check situation: Blink to block, Vengeance to destroy attacker
+function botEmergencyEscape(state, forColor) {
+  if (state.aetherBlocked[forColor]) return null;
+  const aether = state.mana[forColor];
+  const opp = opposite(forColor);
+  const kingPos = findKing(state.board, forColor);
+  if (!kingPos) return null;
+
+  // Find the attacking piece(s)
+  const attackers = [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (!p || p.color !== opp) continue;
+    const attacks = typeof getAttackSquares === 'function' ? getAttackSquares(state.board, r, c) : [];
+    if (attacks.some(a => a.r === kingPos.r && a.c === kingPos.c)) {
+      attackers.push({ r, c, piece: p });
+    }
+  }
+
+  // Try VENGEANCE: destroy the attacker
+  if (aether >= POWER_COSTS[POWER.VENGEANCE] && attackers.length > 0) {
+    // Destroy the most valuable attacker
+    let best = attackers[0];
+    for (const a of attackers) {
+      if (BOT_PIECE_VALUES[a.piece.type] > BOT_PIECE_VALUES[best.piece.type]) best = a;
+    }
+    if (best.piece.type !== PIECE.KING) {
+      const res = castVengeance(state, best.r, best.c);
+      if (res && res.success) {
+        return { name: 'VENGEANCE', payload: { power: 'VENGEANCE', r: best.r, c: best.c } };
+      }
+    }
+  }
+
+  // Try BLINK: move a piece to block the check line
+  if (aether >= POWER_COSTS[POWER.BLINK] && attackers.length === 1) {
+    const attacker = attackers[0];
+    // Find squares between attacker and king (for sliding pieces)
+    const betweenSquares = [];
+    const dr = Math.sign(kingPos.r - attacker.r);
+    const dc = Math.sign(kingPos.c - attacker.c);
+    if (dr !== 0 || dc !== 0) {
+      let r = attacker.r + dr, c = attacker.c + dc;
+      while (r !== kingPos.r || c !== kingPos.c) {
+        if (inBounds(r, c)) betweenSquares.push({ r, c });
+        r += dr; c += dc;
+      }
+    }
+
+    // Try to blink any own non-king piece to a blocking square
+    for (const blockSq of betweenSquares) {
+      if (state.board[blockSq.r][blockSq.c]) continue; // must be empty
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
+        if (p.imprisoned || (p.frozenUntil && p.frozenUntil > state.turnNumber)) continue;
+        // Check if blockSq is in blink range of this piece
+        const top = Math.max(0, Math.min(r - 1, 5));
+        const left = Math.max(0, Math.min(c - 1, 5));
+        if (blockSq.r >= top && blockSq.r < top + 3 && blockSq.c >= left && blockSq.c < left + 3) {
+          const res = castBlink(state, r, c, blockSq.r, blockSq.c);
+          if (res && res.success) {
+            return { name: 'BLINK', payload: { power: 'BLINK', from: { r, c }, to: blockSq } };
+          }
+        }
+      }
+    }
+  }
+
+  // Try WALL: might help if there's a piece adjacent to king
+  if (aether >= POWER_COSTS[POWER.WALL]) {
+    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+      if (dr === 0 && dc === 0) continue;
+      const nr = kingPos.r + dr, nc = kingPos.c + dc;
+      if (!inBounds(nr, nc)) continue;
+      const p = state.board[nr][nc];
+      if (p && p.color === forColor && p.type !== PIECE.KING) {
+        const res = castWall(state, nr, nc);
+        if (res && res.success) {
+          return { name: 'WALL', payload: { power: 'WALL', r: nr, c: nc } };
+        }
+      }
+    }
+  }
+
+  return null; // No escape found — checkmate
 }
 
 // ---------- Main Bot Turn ----------
@@ -855,7 +1138,15 @@ function botExecuteTurn() {
   // Phase 3: Make a chess move
   const moves = allLegalMoves(UI.state.board, color, UI.state);
   if (moves.length === 0) {
-    // No legal moves — engine should have caught this in endOfTurn. Shouldn't reach here.
+    // No legal chess moves — try emergency powers to escape check
+    if (isInCheck(UI.state.board, color)) {
+      const escaped = botEmergencyEscape(UI.state, color);
+      if (escaped) {
+        if (typeof recordAction === 'function') recordAction('POWER_CAST', color, escaped.payload || { power: escaped.name });
+        setStatus(`Bot used ${escaped.name} to escape check!`, 'ok');
+        render();
+      }
+    }
     botFinishTurn();
     return;
   }
@@ -866,7 +1157,7 @@ function botExecuteTurn() {
     // Pure random
     chosenMove = moves[Math.floor(Math.random() * moves.length)];
   } else if (BOT.difficulty === 'hard') {
-    // Hard: 1-ply minimax — evaluate position AFTER each move
+    // Hard: 2-ply alpha-beta with quiescence search
     chosenMove = botSearchBestMove(UI.state, moves, color);
   } else {
     // Medium: Score all moves and pick from top 3 with randomness
@@ -895,6 +1186,9 @@ function botExecuteTurn() {
   if (piece && piece.type === PIECE.PAWN && (chosenMove.to.r === 0 || chosenMove.to.r === 7)) {
     promoType = PIECE.QUEEN; // always promote to queen
   }
+
+  // Record move for repetition avoidance
+  botRecordMove(chosenMove.from, chosenMove.to);
 
   const res = makeMove(UI.state, chosenMove.from.r, chosenMove.from.c, chosenMove.to.r, chosenMove.to.c, promoType);
   if (res.error) {
@@ -943,7 +1237,8 @@ function botStart(color, difficulty) {
   BOT.color = color || COLOR.BLACK;
   BOT.difficulty = difficulty || 'medium';
   BOT.thinking = false;
-  BOT.thinkDelay = difficulty === 'easy' ? 400 : difficulty === 'hard' ? 1000 : 600;
+  BOT.thinkDelay = difficulty === 'easy' ? 400 : difficulty === 'hard' ? 500 : 600;
+  botClearHistory();
   console.log(`[bot] Started as ${BOT.color === COLOR.WHITE ? 'White' : 'Black'}, difficulty: ${BOT.difficulty}`);
   botCheckTurn();
 }
@@ -986,6 +1281,7 @@ function botVsBotStart(opts = {}) {
 function botVsBotNewGame() {
   BOT.gameCount++;
   BOT.thinking = false;
+  botClearHistory();
 
   // Re-init game state
   if (typeof UI !== 'undefined' && UI.state) {

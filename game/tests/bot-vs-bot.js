@@ -43,7 +43,7 @@ const {
 } = ctx;
 
 const {
-  POWER, POWER_COSTS, AETHER_CAP, CENTER_SQUARES,
+  POWER, POWER_COSTS, AETHER_CAP, CENTER_SQUARES, SACRIFICE_VALUES,
   createGameState, initGame, startOfTurn, endOfTurn, makeMove, sacrificePiece,
   castFrost, castFortify, castBlink, castSpawn,
   castBomba, castDoubleAttack, castImprison, castAetherBlock, castCleanse,
@@ -234,48 +234,121 @@ function botScoreMove(state, from, to, forColor) {
   return score;
 }
 
+// Move history for repetition avoidance
+const BOT_MOVE_HISTORY = [];
+const BOT_HISTORY_MAX = 12;
+function botRecordMove(from, to) { BOT_MOVE_HISTORY.push(`${from.r}${from.c}${to.r}${to.c}`); if (BOT_MOVE_HISTORY.length > BOT_HISTORY_MAX) BOT_MOVE_HISTORY.shift(); }
+function botMoveRepeatCount(from, to) { const k = `${from.r}${from.c}${to.r}${to.c}`; let c = 0; for (const h of BOT_MOVE_HISTORY) if (h === k) c++; return c; }
+function botClearHistory() { BOT_MOVE_HISTORY.length = 0; }
+
+// ---------- Alpha-Beta Search (mirrors browser bot.js) ----------
+const BOT_SEARCH_DEPTH = 2;
+const BOT_ROOT_CANDIDATES = 12;
+
+function botOrderScore(state, m, forColor) {
+  let s = 0;
+  const piece = state.board[m.from.r][m.from.c];
+  const target = state.board[m.to.r][m.to.c];
+  if (target && target.color !== piece.color) {
+    s += 10000 + BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
+  }
+  if (piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) s += 9000;
+  const phase = botGamePhase(state);
+  s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
+  if (phase < 0.5 && piece.type !== PIECE.KING) {
+    const oppKing = findKing(state.board, opposite(forColor));
+    if (oppKing) {
+      const dist = Math.abs(m.to.r - oppKing.r) + Math.abs(m.to.c - oppKing.c);
+      if (dist <= 2) s += 300;
+    }
+  }
+  return s;
+}
+
+function botNegamax(state, depth, alpha, beta, forColor) {
+  const opp = opposite(forColor);
+  if (depth === 0) return botQuiesce(state, alpha, beta, forColor);
+  const moves = allLegalMoves(state.board, forColor, state);
+  if (moves.length === 0) {
+    if (isInCheck(state.board, forColor)) return -99999 + (BOT_SEARCH_DEPTH - depth);
+    return 0;
+  }
+  moves.sort((a, b) => botOrderScore(state, b, forColor) - botOrderScore(state, a, forColor));
+  for (const m of moves) {
+    const snap = snapshot(state.board);
+    const piece = state.board[m.from.r][m.from.c];
+    applyMoveRaw(state.board, m.from.r, m.from.c, { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant }, state);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+      state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
+    }
+    const score = -botNegamax(state, depth - 1, -beta, -alpha, opp);
+    restore(state.board, snap);
+    if (score >= beta) return beta;
+    if (score > alpha) alpha = score;
+  }
+  return alpha;
+}
+
+function botQuiesce(state, alpha, beta, forColor) {
+  const standPat = botEvaluate(state, forColor);
+  if (standPat >= beta) return beta;
+  if (standPat > alpha) alpha = standPat;
+  const opp = opposite(forColor);
+  const moves = allLegalMoves(state.board, forColor, state);
+  const captures = moves.filter(m => m.move.capture);
+  captures.sort((a, b) => {
+    const aVal = state.board[a.to.r][a.to.c] ? BOT_PIECE_VALUES[state.board[a.to.r][a.to.c].type] : 0;
+    const bVal = state.board[b.to.r][b.to.c] ? BOT_PIECE_VALUES[state.board[b.to.r][b.to.c].type] : 0;
+    return bVal - aVal;
+  });
+  const topCaptures = captures.slice(0, 5);
+  for (const m of topCaptures) {
+    const snap = snapshot(state.board);
+    const piece = state.board[m.from.r][m.from.c];
+    applyMoveRaw(state.board, m.from.r, m.from.c, { r: m.to.r, c: m.to.c, capture: true, castle: m.move.castle, enPassant: m.move.enPassant }, state);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+      state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
+    }
+    const score = -botQuiesce(state, -beta, -alpha, opp);
+    restore(state.board, snap);
+    if (score >= beta) return beta;
+    if (score > alpha) alpha = score;
+  }
+  return alpha;
+}
+
 function botSearchBestMove(state, moves, color) {
   const opp = opposite(color);
-  let bestMove = null, bestScore = -Infinity;
-  const apply = applyMoveRaw;
-
-  // Check for immediate checkmate
-  for (const m of moves) {
+  const scored = moves.map(m => ({ m, s: botOrderScore(state, m, color) }));
+  scored.sort((a, b) => b.s - a.s);
+  const candidates = scored.slice(0, Math.min(BOT_ROOT_CANDIDATES, scored.length));
+  let bestMove = candidates[0].m;
+  let bestScore = -Infinity;
+  let alpha = -Infinity;
+  const beta = Infinity;
+  for (const { m } of candidates) {
     const snap = snapshot(state.board);
     const piece = state.board[m.from.r][m.from.c];
-    apply(state.board, m.from.r, m.from.c, { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant }, state);
-    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, color);
-    const mate = isCheckmate(state.board, opp, state);
-    restore(state.board, snap);
-    if (mate) return m;
-  }
-
-  // Evaluate each move — compute move score BEFORE applying (piece is still on from)
-  for (const m of moves) {
-    const moveScore = botScoreMove(state, m.from, m.to, color);
-    const snap = snapshot(state.board);
-    const piece = state.board[m.from.r][m.from.c];
-    apply(state.board, m.from.r, m.from.c, { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant }, state);
-    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, color);
-    // Penalize stalemate when winning
-    if (isStalemate(state.board, opp, state)) {
-      const myMat = botCountMaterial(state, color);
-      const oppMat = botCountMaterial(state, opp);
-      restore(state.board, snap);
-      if (myMat > oppMat + 100) { if (-5000 > bestScore) { bestScore = -5000; bestMove = m; } continue; }
+    applyMoveRaw(state.board, m.from.r, m.from.c, { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant }, state);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+      state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, color);
     }
-    let ev = botEvaluate(state, color) + moveScore * 0.1;
+    let score = -botNegamax(state, BOT_SEARCH_DEPTH - 1, -beta, -alpha, opp);
     restore(state.board, snap);
-    if (ev > bestScore) { bestScore = ev; bestMove = m; }
+    // Repetition penalty
+    const repeats = botMoveRepeatCount(m.from, m.to);
+    if (repeats > 0) score -= repeats * 150;
+    if (score > bestScore) { bestScore = score; bestMove = m; }
+    if (score > alpha) alpha = score;
   }
-  return bestMove || moves[0];
+  return bestMove;
 }
 
 function botPickMove(state, color, difficulty) {
   const moves = allLegalMoves(state.board, color, state);
   if (moves.length === 0) return null;
-  if (difficulty === 'easy') return moves[Math.floor(Math.random() * moves.length)];
-  if (difficulty === 'hard') return botSearchBestMove(state, moves, color);
+  if (difficulty === 'easy') { const m = moves[Math.floor(Math.random() * moves.length)]; botRecordMove(m.from, m.to); return m; }
+  if (difficulty === 'hard') { const m = botSearchBestMove(state, moves, color); botRecordMove(m.from, m.to); return m; }
   // Medium
   const scored = moves.map(m => ({ move: m, score: botScoreMove(state, m.from, m.to, color) }));
   scored.sort((a, b) => b.score - a.score);
@@ -283,7 +356,8 @@ function botPickMove(state, color, difficulty) {
   const weights = top.map((s, i) => Math.max(1, 10 - i * 3));
   const totalWeight = weights.reduce((a, b) => a + b, 0);
   let r = Math.random() * totalWeight;
-  for (let i = 0; i < top.length; i++) { r -= weights[i]; if (r <= 0) return top[i].move; }
+  for (let i = 0; i < top.length; i++) { r -= weights[i]; if (r <= 0) { botRecordMove(top[i].move.from, top[i].move.to); return top[i].move; } }
+  botRecordMove(top[0].move.from, top[0].move.to);
   return top[0].move;
 }
 
@@ -382,23 +456,45 @@ function botTrySacrifice(state, color, difficulty) {
   if (!state.aetherBlocked || !state.sacrificedThisTurn) return null;
   if (state.aetherBlocked[color] || state.sacrificedThisTurn[color]) return null;
   const phase = botGamePhase(state);
+  const aether = state.mana[color];
+  const opp = opposite(color);
+
+  // HARD MODE: only sacrifice when it directly enables a game-winning power
+  if (difficulty === 'hard') {
+    if (aether >= POWER_COSTS[POWER.VENGEANCE]) return null;
+    const myMat = botCountMaterial(state, color);
+    const oppMat = botCountMaterial(state, opp);
+    if (myMat - oppMat < 300) return null; // must be significantly ahead
+    // Only sacrifice pawns far from promotion
+    let bestSac = null;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color !== color || p.type !== PIECE.PAWN || p.isSpectral) continue;
+      const distToPromo = color === COLOR.WHITE ? r : (7 - r);
+      if (distToPromo <= 3) continue;
+      bestSac = { r, c }; break;
+    }
+    if (!bestSac) return null;
+    const gain = SACRIFICE_VALUES[state.board[bestSac.r][bestSac.c].type] || 1;
+    const afterAether = Math.min(AETHER_CAP, aether + gain);
+    if (afterAether < POWER_COSTS[POWER.PROMOTE]) return null;
+    if (Math.random() > 0.3) return null;
+    return bestSac;
+  }
+
+  // EASY/MEDIUM
   const aetherCap = phase < 0.5 ? 20 : 15;
-  if (state.mana[color] >= aetherCap) return null;
+  if (aether >= aetherCap) return null;
   let bestSac = null, bestCost = Infinity;
   for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
     const p = state.board[r][c];
     if (!p || p.color !== color || p.type === PIECE.KING || p.isSpectral) continue;
-    if (difficulty !== 'hard' && (p.type === PIECE.QUEEN || p.type === PIECE.ROOK)) continue;
-    if (difficulty === 'hard' && phase > 0.5 && p.type === PIECE.QUEEN) continue;
+    if (p.type === PIECE.QUEEN || p.type === PIECE.ROOK) continue;
     if (p.type === PIECE.PAWN) { const d = color === COLOR.WHITE ? r : (7 - r); if (d <= 2) continue; }
     if (BOT_PIECE_VALUES[p.type] < bestCost) { bestCost = BOT_PIECE_VALUES[p.type]; bestSac = { r, c }; }
   }
   if (!bestSac) return null;
-  const opp = opposite(color);
-  const myMat = botCountMaterial(state, color);
-  const oppMat = botCountMaterial(state, opp);
-  const aheadBonus = (myMat - oppMat > 300 && phase < 0.5) ? 0.3 : 0;
-  const chance = difficulty === 'easy' ? 0.1 : difficulty === 'medium' ? 0.25 : (0.5 + aheadBonus);
+  const chance = difficulty === 'easy' ? 0.1 : 0.25;
   if (Math.random() > chance) return null;
   return bestSac;
 }
@@ -454,6 +550,7 @@ function validateState(state, turnNum, violations) {
 // ---------- Run One Game ----------
 function runOneGame(whiteDiff, blackDiff, maxTurns) {
   maxTurns = maxTurns || 200;
+  botClearHistory();
   const state = initGame();
   const violations = [];
   const powerStats = { w: {}, b: {} };
@@ -537,6 +634,7 @@ function runOneGame(whiteDiff, blackDiff, maxTurns) {
 // ---------- Run One Classical Game (no powers, no mana) ----------
 function runOneClassicalGame(whiteDiff, blackDiff, maxTurns) {
   maxTurns = maxTurns || 200;
+  botClearHistory();
   const state = initGame();
   const violations = [];
   let turnCount = 0;
