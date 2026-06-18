@@ -290,14 +290,17 @@ function botEvaluate(state, forColor) {
         if (p && p.type === PIECE.PAWN && p.color === forColor) shieldPawns++;
       }
     }
-    score += shieldPawns * 20;
+    score += shieldPawns * 25;
     // Penalize king on open file (no own pawn on same file)
     let ownPawnOnFile = false;
     for (let scanR = 0; scanR < 8; scanR++) {
       const p = state.board[scanR][myKingPos.c];
       if (p && p.type === PIECE.PAWN && p.color === forColor) { ownPawnOnFile = true; break; }
     }
-    if (!ownPawnOnFile) score -= 30;
+    if (!ownPawnOnFile) score -= 40;
+    // Penalize king that has moved out of castled position (exposed)
+    const castleFile = myKingPos.c;
+    if (castleFile >= 2 && castleFile <= 5) score -= 30; // king in center = danger
   }
 
   // ===== OPPONENT KING SAFETY (exploit weakness) =====
@@ -312,7 +315,20 @@ function botEvaluate(state, forColor) {
       }
     }
     // Reward attacking positions when opponent king is exposed
-    if (oppShieldPawns < 2) score += (2 - oppShieldPawns) * 25;
+    if (oppShieldPawns < 2) score += (2 - oppShieldPawns) * 35;
+    // Bonus for our pieces being near exposed enemy king
+    if (oppShieldPawns <= 1) {
+      let attackersNearKing = 0;
+      for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+        const ar = oppKingPos.r + dr, ac = oppKingPos.c + dc;
+        if (!inBounds(ar, ac)) continue;
+        const p = state.board[ar][ac];
+        if (p && p.color === forColor && p.type !== PIECE.PAWN && p.type !== PIECE.KING) {
+          attackersNearKing++;
+        }
+      }
+      score += attackersNearKing * 20; // reward pieces converging on weak king
+    }
   }
 
   // ===== PIECE ACTIVITY / DEVELOPMENT =====
@@ -322,16 +338,33 @@ function botEvaluate(state, forColor) {
     for (let c = 0; c < 8; c++) {
       const p = state.board[backRank][c];
       if (p && p.color === forColor && (p.type === PIECE.KNIGHT || p.type === PIECE.BISHOP)) {
-        score -= 25; // penalty for undeveloped minor piece
+        score -= 35; // penalty for undeveloped minor piece
       }
     }
     const oppBackRank = opp === COLOR.WHITE ? 7 : 0;
     for (let c = 0; c < 8; c++) {
       const p = state.board[oppBackRank][c];
       if (p && p.color === opp && (p.type === PIECE.KNIGHT || p.type === PIECE.BISHOP)) {
-        score += 25; // reward opponent being undeveloped
+        score += 35; // reward opponent being undeveloped
       }
     }
+  }
+
+  // ===== PIECE CONNECTIVITY =====
+  // Bonus for pieces that defend each other (better coordination)
+  if (phase > 0.4) {
+    let myConnected = 0, oppConnected = 0;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.isSpectral || p.type === PIECE.KING || p.type === PIECE.PAWN) continue;
+      if (p.color === forColor) {
+        if (isSquareAttacked(state.board, r, c, forColor)) myConnected++;
+      } else {
+        if (isSquareAttacked(state.board, r, c, opp)) oppConnected++;
+      }
+    }
+    score += myConnected * 12;
+    score -= oppConnected * 12;
   }
 
   // ===== BISHOP PAIR BONUS =====
@@ -358,6 +391,38 @@ function botEvaluate(state, forColor) {
     const bonus = pawnsOnFile === 0 ? 30 : pawnsOnFile === 1 ? 15 : 0;
     if (p.color === forColor) score += bonus;
     else score -= bonus;
+  }
+
+  // ===== HANGING PIECE PENALTY =====
+  // Penalize pieces that are attacked and not adequately defended.
+  // This is THE most important tactical pattern — prevents blunders like Nc2 walking into Kxc2.
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (!p || p.isSpectral || p.type === PIECE.KING) continue;
+    if (p.shieldHP > 0) continue; // shielded pieces are safe
+    const val = BOT_PIECE_VALUES[p.type];
+    if (val <= 100) continue; // don't bother with pawns (too slow to check all)
+    if (p.color === forColor) {
+      // Is our piece attacked by opponent?
+      if (isSquareAttacked(state.board, r, c, opp)) {
+        // Is it defended by us?
+        if (!isSquareAttacked(state.board, r, c, forColor)) {
+          score -= val * 0.6; // Undefended and attacked = likely to be captured
+        } else {
+          // Defended but attacked — if attacked by a less valuable piece, still bad
+          score -= val * 0.1; // Slight tension penalty
+        }
+      }
+    } else {
+      // Is opponent's piece attacked by us?
+      if (isSquareAttacked(state.board, r, c, forColor)) {
+        if (!isSquareAttacked(state.board, r, c, opp)) {
+          score += val * 0.6; // Opponent has a hanging piece we can take
+        } else {
+          score += val * 0.1;
+        }
+      }
+    }
   }
 
   return score;
@@ -447,16 +512,33 @@ function botCountMaterial(state, color) {
 // Fast enough for browser: move ordering ensures early cutoffs, and we limit
 // the candidate set at the root to keep wall-clock under ~200ms.
 const BOT_SEARCH_DEPTH = 3; // 3-ply = my move + response + my follow-up
-const BOT_ROOT_CANDIDATES = 10; // Only deep-search the top N root moves (tighter at depth 3)
+const BOT_ROOT_CANDIDATES = 12; // Deep-search top N root moves (wider to avoid missing good moves)
 
 // Quick move-ordering score (no board copies — pure heuristics)
 function botOrderScore(state, m, forColor) {
   let s = 0;
+  const opp = opposite(forColor);
   const piece = state.board[m.from.r][m.from.c];
   const target = state.board[m.to.r][m.to.c];
   // MVV-LVA for captures
   if (target && target.color !== piece.color) {
     s += 10000 + BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
+    // Penalize capturing into a defended square with a more valuable piece
+    if (BOT_PIECE_VALUES[piece.type] > BOT_PIECE_VALUES[target.type]) {
+      if (isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
+        s -= 5000; // likely losing exchange
+      }
+    }
+  } else {
+    // Non-capture: penalize moving to an attacked square (hanging piece)
+    if (piece.type !== PIECE.PAWN && isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
+      // Check if the square is also defended by us
+      if (!isSquareAttacked(state.board, m.to.r, m.to.c, forColor)) {
+        s -= BOT_PIECE_VALUES[piece.type] * 3; // heavy penalty: piece will be lost
+      } else if (BOT_PIECE_VALUES[piece.type] > 320) {
+        s -= 200; // slight penalty: trading on an attacked square with valuable piece
+      }
+    }
   }
   // Promotions
   if (piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) s += 9000;
@@ -465,7 +547,7 @@ function botOrderScore(state, m, forColor) {
   s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
   // King aggression in endgame
   if (phase < 0.5 && piece.type !== PIECE.KING) {
-    const oppKing = findKing(state.board, opposite(forColor));
+    const oppKing = findKing(state.board, opp);
     if (oppKing) {
       const dist = Math.abs(m.to.r - oppKing.r) + Math.abs(m.to.c - oppKing.c);
       if (dist <= 2) s += 300;
@@ -632,19 +714,31 @@ function botConsiderPowers(state, forColor) {
   }
 
   // PROMOTE: If we have a pawn, promote it — very high priority
+  // But ONLY if the promoted queen won't be immediately captured undefended!
   if (aether >= POWER_COSTS[POWER.PROMOTE]) {
-    let bestPawn = null, bestDist = 99;
+    let bestPawn = null, bestDist = 99, bestSafe = false;
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (p && p.color === forColor && p.type === PIECE.PAWN && !p.isSpectral) {
         const distToPromo = forColor === COLOR.WHITE ? r : (7 - r);
-        if (distToPromo < bestDist) { bestDist = distToPromo; bestPawn = { r, c }; }
+        // Check if the pawn's square is safe after promotion
+        const attacked = isSquareAttacked(state.board, r, c, opp);
+        const defended = isSquareAttacked(state.board, r, c, forColor);
+        const safe = !attacked || defended;
+        // Prefer safe pawns; among safe ones, prefer closest to promo
+        if (safe && (!bestSafe || distToPromo < bestDist)) {
+          bestDist = distToPromo; bestPawn = { r, c }; bestSafe = true;
+        } else if (!bestSafe && distToPromo < bestDist) {
+          bestDist = distToPromo; bestPawn = { r, c };
+        }
       }
     }
     if (bestPawn) {
       // Priority increases sharply with closeness to promotion and in endgame
       const basePrio = 80 + (7 - bestDist) * 15;
-      const prio = phase < 0.5 ? basePrio * 1.5 : basePrio;
+      let prio = phase < 0.5 ? basePrio * 1.5 : basePrio;
+      // If the best pawn is attacked and undefended, reduce priority significantly
+      if (!bestSafe) prio *= 0.4;
       candidates.push({
         priority: prio,
         exec: () => castPromote(state, bestPawn.r, bestPawn.c, PIECE.QUEEN),

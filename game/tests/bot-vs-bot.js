@@ -181,6 +181,39 @@ function botEvaluate(state, forColor) {
     score += Math.max(0, (6000 - total) / 75);
   }
 
+  // Hanging piece penalty — critical for tactical awareness
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (!p || p.isSpectral || p.type === PIECE.KING) continue;
+    if (p.shieldHP > 0) continue;
+    const val = BOT_PIECE_VALUES[p.type];
+    if (val <= 100) continue;
+    if (p.color === forColor) {
+      if (isSquareAttacked(state.board, r, c, opp)) {
+        if (!isSquareAttacked(state.board, r, c, forColor)) score -= val * 0.6;
+        else score -= val * 0.1;
+      }
+    } else {
+      if (isSquareAttacked(state.board, r, c, forColor)) {
+        if (!isSquareAttacked(state.board, r, c, opp)) score += val * 0.6;
+        else score += val * 0.1;
+      }
+    }
+  }
+
+  // Piece connectivity bonus
+  if (phase > 0.4) {
+    let myConn = 0, oppConn = 0;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.isSpectral || p.type === PIECE.KING || p.type === PIECE.PAWN) continue;
+      if (p.color === forColor) { if (isSquareAttacked(state.board, r, c, forColor)) myConn++; }
+      else { if (isSquareAttacked(state.board, r, c, opp)) oppConn++; }
+    }
+    score += myConn * 12;
+    score -= oppConn * 12;
+  }
+
   return score;
 }
 
@@ -243,20 +276,36 @@ function botClearHistory() { BOT_MOVE_HISTORY.length = 0; }
 
 // ---------- Alpha-Beta Search (mirrors browser bot.js) ----------
 const BOT_SEARCH_DEPTH = 3;
-const BOT_ROOT_CANDIDATES = 10;
+const BOT_ROOT_CANDIDATES = 12;
 
 function botOrderScore(state, m, forColor) {
   let s = 0;
+  const opp = opposite(forColor);
   const piece = state.board[m.from.r][m.from.c];
   const target = state.board[m.to.r][m.to.c];
   if (target && target.color !== piece.color) {
     s += 10000 + BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
+    // Penalize capturing into a defended square with a more valuable piece
+    if (BOT_PIECE_VALUES[piece.type] > BOT_PIECE_VALUES[target.type]) {
+      if (isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
+        s -= 5000; // likely losing exchange
+      }
+    }
+  } else {
+    // Non-capture: penalize moving to an attacked square (hanging piece)
+    if (piece.type !== PIECE.PAWN && isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
+      if (!isSquareAttacked(state.board, m.to.r, m.to.c, forColor)) {
+        s -= BOT_PIECE_VALUES[piece.type] * 3; // heavy penalty: piece will be lost
+      } else if (BOT_PIECE_VALUES[piece.type] > 320) {
+        s -= 200; // slight penalty: trading on an attacked square with valuable piece
+      }
+    }
   }
   if (piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) s += 9000;
   const phase = botGamePhase(state);
   s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
   if (phase < 0.5 && piece.type !== PIECE.KING) {
-    const oppKing = findKing(state.board, opposite(forColor));
+    const oppKing = findKing(state.board, opp);
     if (oppKing) {
       const dist = Math.abs(m.to.r - oppKing.r) + Math.abs(m.to.c - oppKing.c);
       if (dist <= 2) s += 300;
