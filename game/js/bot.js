@@ -459,7 +459,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: prio,
         exec: () => castVengeance(state, bestTarget.r, bestTarget.c),
-        name: 'VENGEANCE'
+        name: 'VENGEANCE',
+        payload: { power: 'VENGEANCE', r: bestTarget.r, c: bestTarget.c }
       });
     }
   }
@@ -481,7 +482,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: prio,
         exec: () => castPromote(state, bestPawn.r, bestPawn.c, PIECE.QUEEN),
-        name: 'PROMOTE'
+        name: 'PROMOTE',
+        payload: { power: 'PROMOTE', r: bestPawn.r, c: bestPawn.c, newType: PIECE.QUEEN }
       });
     }
   }
@@ -503,7 +505,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: bestVal * 0.1,
         exec: () => castFrost(state, bestTarget.r, bestTarget.c),
-        name: 'FROST'
+        name: 'FROST',
+        payload: { power: 'FROST', r: bestTarget.r, c: bestTarget.c }
       });
     }
   }
@@ -524,7 +527,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: bestVal * 0.08,
         exec: () => castFortify(state, bestPiece.r, bestPiece.c),
-        name: 'FORTIFY'
+        name: 'FORTIFY',
+        payload: { power: 'FORTIFY', r: bestPiece.r, c: bestPiece.c }
       });
     }
   }
@@ -567,7 +571,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: bestBlinkScore,
         exec: () => castBlink(state, bestBlink.fromR, bestBlink.fromC, bestBlink.toR, bestBlink.toC),
-        name: 'BLINK'
+        name: 'BLINK',
+        payload: { power: 'BLINK', from: { r: bestBlink.fromR, c: bestBlink.fromC }, to: { r: bestBlink.toR, c: bestBlink.toC } }
       });
     }
   }
@@ -582,7 +587,8 @@ function botConsiderPowers(state, forColor) {
         candidates.push({
           priority: 15, // lower than before
           exec: () => castSpawn(state, f.r, f.c),
-          name: 'SPAWN'
+          name: 'SPAWN',
+          payload: { power: 'SPAWN', r: f.r, c: f.c }
         });
         break;
       }
@@ -597,7 +603,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: phase < 0.5 ? 25 : 35, // lower in endgame (our powers matter more)
         exec: () => castAetherBlock(state),
-        name: 'AETHER_BLOCK'
+        name: 'AETHER_BLOCK',
+        payload: { power: 'AETHER_BLOCK' }
       });
     }
   }
@@ -626,7 +633,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: bestBombaScore * 0.06,
         exec: () => castBomba(state, bestBomba.r, bestBomba.c),
-        name: 'BOMBA'
+        name: 'BOMBA',
+        payload: { power: 'BOMBA', r: bestBomba.r, c: bestBomba.c }
       });
     }
   }
@@ -659,7 +667,8 @@ function botConsiderPowers(state, forColor) {
       candidates.push({
         priority: bestImpVal * 0.09,
         exec: () => castImprison(state, bestImprison.captorR, bestImprison.captorC, bestImprison.captiveR, bestImprison.captiveC),
-        name: 'IMPRISON'
+        name: 'IMPRISON',
+        payload: { power: 'IMPRISON', captor: { r: bestImprison.captorR, c: bestImprison.captorC }, captive: { r: bestImprison.captiveR, c: bestImprison.captiveC } }
       });
     }
   }
@@ -678,7 +687,8 @@ function botConsiderPowers(state, forColor) {
           candidates.push({
             priority: 45,
             exec: () => castWall(state, nr, nc),
-            name: 'WALL'
+            name: 'WALL',
+            payload: { power: 'WALL', r: nr, c: nc }
           });
           break;
         }
@@ -780,6 +790,10 @@ function botPlay() {
       botExecuteTurn();
     } catch (e) {
       console.error('[bot] Error during turn:', e);
+      // Ensure the loop continues even after an error
+      BOT.thinking = false;
+      if (typeof render === 'function') render();
+      return;
     }
     BOT.thinking = false;
   }, delay);
@@ -807,6 +821,7 @@ function botExecuteTurn() {
   if (sacTarget) {
     const res = sacrificePiece(UI.state, sacTarget.r, sacTarget.c);
     if (res.success) {
+      if (typeof recordAction === 'function') recordAction('SACRIFICE', color, { r: sacTarget.r, c: sacTarget.c });
       setStatus(`Bot sacrificed for +${res.gain} Aether.`, 'ok');
       floatingText(`+${res.gain}`, sacTarget.r, sacTarget.c, 'aether');
       render();
@@ -819,6 +834,7 @@ function botExecuteTurn() {
   if (powerAction) {
     const res = powerAction.exec();
     if (res && res.success) {
+      if (typeof recordAction === 'function') recordAction('POWER_CAST', color, powerAction.payload || { power: powerAction.name });
       setStatus(`Bot cast ${powerAction.name}!`, 'ok');
       render();
       // If the power ended the turn (Blink, Vengeance, Wall, Promote, DoubleAttack), we're done
@@ -886,6 +902,9 @@ function botExecuteTurn() {
     console.warn('[bot] Move failed:', res.error, 'trying random fallback');
     const fallback = moves[Math.floor(Math.random() * moves.length)];
     makeMove(UI.state, fallback.from.r, fallback.from.c, fallback.to.r, fallback.to.c, promoType);
+    if (typeof recordAction === 'function') recordAction('MOVE', color, { from: fallback.from, to: fallback.to, promotion: promoType });
+  } else {
+    if (typeof recordAction === 'function') recordAction('MOVE', color, { from: chosenMove.from, to: chosenMove.to, promotion: promoType });
   }
 
   // Restore difficulty
@@ -971,6 +990,7 @@ function botVsBotNewGame() {
   // Re-init game state
   if (typeof UI !== 'undefined' && UI.state) {
     UI.state = initGame();
+    UI.gameActions = [];
     UI.selected = null;
     if (typeof UI.activePower !== 'undefined') UI.activePower = null;
     if (typeof UI.powerState !== 'undefined') UI.powerState = {};

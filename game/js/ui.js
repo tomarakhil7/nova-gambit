@@ -36,9 +36,18 @@ const UI = {
   }
 };
 
+// ---------- Game Action Recording (for post-game study) ----------
+// Records actions in the same format openReplay() expects, enabling move-by-move review.
+UI.gameActions = [];
+
+function recordAction(type, by, payload) {
+  UI.gameActions.push({ type, by, payload });
+}
+
 // ---------- Init ----------
 function initUI() {
   UI.state = initGame();
+  UI.gameActions = []; // Reset action log on new game
   UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
   initClock(UI.clock.mode);
   buildBoard();
@@ -254,6 +263,7 @@ function buildPowerPanel() {
     const testPanel = document.getElementById('bot-test-panel');
     if (testPanel) testPanel.remove();
     UI.state = initGame();
+    UI.gameActions = []; // Clear action log for new game
     UI.selected = null; UI.activePower = null; UI.powerState = {};
     UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
     buildBoard();
@@ -555,6 +565,20 @@ function openReplay(game) {
   bd.querySelector('#rp-next').addEventListener('click', () => renderReplayAt(idx + 1));
   bd.querySelector('#rp-end').addEventListener('click', () => renderReplayAt(snapshots.length - 1));
   bd.querySelector('#rp-close').addEventListener('click', () => bd.remove());
+
+  // Keyboard navigation: left/right arrows, Home/End
+  function replayKeyHandler(e) {
+    if (!document.getElementById('replay-backdrop')) {
+      document.removeEventListener('keydown', replayKeyHandler);
+      return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'a') renderReplayAt(idx - 1);
+    else if (e.key === 'ArrowRight' || e.key === 'd') renderReplayAt(idx + 1);
+    else if (e.key === 'Home') renderReplayAt(0);
+    else if (e.key === 'End') renderReplayAt(snapshots.length - 1);
+    else if (e.key === 'Escape') bd.remove();
+  }
+  document.addEventListener('keydown', replayKeyHandler);
 
   renderReplayAt(0);
 }
@@ -1469,9 +1493,12 @@ function netInterceptPower(power, args, sourceSquares = []) {
   return true;
 }
 
-function handleMoveResult(res, fr, fc, tr, tc) {
+function handleMoveResult(res, fr, fc, tr, tc, promotion) {
   UI.selected = null; UI.legalDots = [];
   if (res.error) { setStatus(res.error, 'err'); render(); return; }
+  // Record successful move for post-game study
+  const moverColor = UI.state.turn === COLOR.WHITE ? COLOR.BLACK : COLOR.WHITE; // turn already switched
+  recordAction('MOVE', moverColor, { from: { r: fr, c: fc }, to: { r: tr, c: tc }, promotion: promotion || undefined });
   if (res.shieldBroke) { playVfx('fortify', tr, tc); setStatus('Shield blocked!', 'warn'); }
   else if (res.defused) { setStatus('Bomba defused!', 'ok'); floatingText('DEFUSED', tr, tc, 'aether'); }
   else { setStatus('Move made.', 'ok'); }
@@ -1510,10 +1537,11 @@ function togglePower(p) {
         netSendPower('AETHER_BLOCK', {});
         UI.activePower = null; render(); return;
       }
+      const abCaster = UI.state.turn;
       pauseClockForAnimation(1200);
       const r = castAetherBlock(UI.state);
       if (r.error) setStatus(r.error, 'err');
-      else { setStatus('Aether Block cast!', 'ok'); playVfxCenter('aether-burn'); }
+      else { recordAction('POWER_CAST', abCaster, { power: 'AETHER_BLOCK' }); setStatus('Aether Block cast!', 'ok'); playVfxCenter('aether-burn'); }
       UI.activePower = null;
       render(); return;
     }
@@ -1523,10 +1551,11 @@ function togglePower(p) {
         netSendPower('CHRONOBREAK', {});
         UI.activePower = null; render(); return;
       }
+      const cbCaster = UI.state.turn;
       pauseClockForAnimation(1500);
       const r = castChronobreak(UI.state);
       if (r.error) setStatus(r.error, 'err');
-      else { setStatus('Chronobreak!', 'ok'); playVfxCenter('rewind'); }
+      else { recordAction('POWER_CAST', cbCaster, { power: 'CHRONOBREAK' }); setStatus('Chronobreak!', 'ok'); playVfxCenter('rewind'); }
       UI.activePower = null;
       render(); return;
     }
@@ -1550,8 +1579,10 @@ function handlePowerClick(r, c) {
       netSendSacrifice(r, c);
       UI.activePower = null; render(); return;
     }
+    const sacCaster = UI.state.turn;
     const res = sacrificePiece(UI.state, r, c);
     if (res.error) { setStatus(res.error, 'err'); return; }
+    recordAction('SACRIFICE', sacCaster, { r, c });
     setStatus(`Sacrificed for +${res.gain} Aether.`, 'ok');
     floatingText(`+${res.gain}`, r, c, 'aether');
     UI.activePower = null; render(); return;
@@ -1559,13 +1590,14 @@ function handlePowerClick(r, c) {
 
   if (p === POWER.FROST) {
     if (netInterceptPower('FROST', { r, c })) return;
+    const frostCaster = UI.state.turn;
     const res = castFrost(UI.state, r, c);
     if (res.error) {
       setStatus(res.error, 'err');
-      // Clear the power selection so the player can immediately pick another.
       UI.activePower = null; UI.powerState = {}; render();
       return;
     }
+    recordAction('POWER_CAST', frostCaster, { power: 'FROST', r, c });
     setStatus(res.passedTurn ? 'Frost applied — opponent in check, turn passes.' : 'Frost applied.', 'ok');
     playVfx('frost', r, c);
     if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
@@ -1576,8 +1608,10 @@ function handlePowerClick(r, c) {
     const piece = UI.state.board[r][c];
     if (piece && piece.type === PIECE.KING) { setStatus('Powers cannot target the King.', 'err'); return; }
     if (netInterceptPower('FORTIFY', { r, c })) return;
+    const fortCaster = UI.state.turn;
     const res = castFortify(UI.state, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
+    recordAction('POWER_CAST', fortCaster, { power: 'FORTIFY', r, c });
     setStatus(res.passedTurn ? 'Fortified — opponent in check, turn passes.' : 'Fortified.', 'ok');
     playVfx('fortify', r, c);
     if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
@@ -1586,8 +1620,10 @@ function handlePowerClick(r, c) {
 
   if (p === POWER.SPAWN) {
     if (netInterceptPower('SPAWN', { r, c })) return;
+    const spawnCaster = UI.state.turn;
     const res = castSpawn(UI.state, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
+    recordAction('POWER_CAST', spawnCaster, { power: 'SPAWN', r, c });
     setStatus(res.passedTurn ? 'Spectral Pawn — opponent in check, turn passes.' : 'Spectral Pawn summoned.', 'ok');
     playVfx('spawn', r, c);
     if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
@@ -1596,8 +1632,10 @@ function handlePowerClick(r, c) {
 
   if (p === POWER.BOMBA) {
     if (netInterceptPower('BOMBA', { r, c })) return;
+    const bombaCaster = UI.state.turn;
     const res = castBomba(UI.state, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
+    recordAction('POWER_CAST', bombaCaster, { power: 'BOMBA', r, c });
     setStatus('Bomba planted.', 'ok');
     playVfx('bomb-plant', r, c);
     UI.activePower = null; UI.powerState = {}; render(); return;
@@ -1606,9 +1644,11 @@ function handlePowerClick(r, c) {
   if (p === POWER.VENGEANCE) {
     if (!confirm(`Destroy piece at ${algebraic(r,c)} with Vengeance? (Turn ends)`)) { UI.activePower = null; render(); return; }
     if (netInterceptPower('VENGEANCE', { r, c })) return;
+    const vengCaster = UI.state.turn;
     pauseClockForAnimation(1500);
     const res = castVengeance(UI.state, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; render(); return; }
+    recordAction('POWER_CAST', vengCaster, { power: 'VENGEANCE', r, c });
     setStatus('Vengeance!', 'ok');
     playVfx('vengeance', r, c);
     if (!UI.state.winner) switchClockTo(UI.state.turn);
@@ -1619,9 +1659,11 @@ function handlePowerClick(r, c) {
     const piece = UI.state.board[r][c];
     if (piece && piece.type === PIECE.KING) { setStatus('King cannot anchor The Wall.', 'err'); return; }
     if (netInterceptPower('WALL', { r, c })) return;
+    const wallCaster = UI.state.turn;
     pauseClockForAnimation(1800);
     const res = castWall(UI.state, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; render(); return; }
+    recordAction('POWER_CAST', wallCaster, { power: 'WALL', r, c });
     setStatus(`The Wall: ${res.spawned} pawns.`, 'ok');
     playVfx('wall', r, c);
     if (!UI.state.winner) switchClockTo(UI.state.turn);
@@ -1659,11 +1701,14 @@ function handlePowerClick(r, c) {
       if (UI.state.board[r][c]) { setStatus('Destination must be empty.', 'err'); return; }
     }
     if (netInterceptPower('BLINK', { from: UI.powerState.src, to: { r, c } })) return;
+    const blinkCaster = UI.state.turn;
+    const blinkSrc = { r: UI.powerState.src.r, c: UI.powerState.src.c };
     pauseClockForAnimation(1200);
-    const res = castBlink(UI.state, UI.powerState.src.r, UI.powerState.src.c, r, c);
+    const res = castBlink(UI.state, blinkSrc.r, blinkSrc.c, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.powerState = {}; render(); return; }
+    recordAction('POWER_CAST', blinkCaster, { power: 'BLINK', from: blinkSrc, to: { r, c } });
     setStatus('Blinked.', 'ok');
-    playVfx('blink', UI.powerState.src.r, UI.powerState.src.c);
+    playVfx('blink', blinkSrc.r, blinkSrc.c);
     playVfx('blink', r, c);
     UI.activePower = null; UI.powerState = {};
     if (!UI.state.winner) switchClockTo(UI.state.turn);
@@ -1697,8 +1742,10 @@ function handlePowerClick(r, c) {
       if (!confirm(msg)) { UI.activePower = null; UI.powerState = {}; render(); return; }
     }
     if (netInterceptPower('CLEANSE', { r, c })) return;
+    const cleanseCaster = UI.state.turn;
     const res = castCleanse(UI.state, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
+    recordAction('POWER_CAST', cleanseCaster, { power: 'CLEANSE', r, c });
     setStatus('Cleanse!', 'ok');
     playVfx('fortify', r, c);
     if (res.released) {
@@ -1722,8 +1769,11 @@ function handlePowerClick(r, c) {
       setStatus('Select adjacent enemy to imprison.', 'ok'); render(); return;
     }
     if (netInterceptPower('IMPRISON', { captor: UI.powerState.captor, captive: { r, c } })) return;
-    const res = castImprison(UI.state, UI.powerState.captor.r, UI.powerState.captor.c, r, c);
+    const imprisonCaster = UI.state.turn;
+    const imprisonCaptor = { r: UI.powerState.captor.r, c: UI.powerState.captor.c };
+    const res = castImprison(UI.state, imprisonCaptor.r, imprisonCaptor.c, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.powerState = {}; return; }
+    recordAction('POWER_CAST', imprisonCaster, { power: 'IMPRISON', captor: imprisonCaptor, captive: { r, c } });
     setStatus(res.passedTurn ? 'Imprisoned — discovered check! Turn passes.' : 'Imprisoned.', 'ok');
     playVfx('imprison', r, c);
     if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
@@ -1745,9 +1795,11 @@ function handlePowerClick(r, c) {
     }
     const a = UI.powerState.attacker, f = UI.powerState.first;
     if (netInterceptPower('DOUBLE_ATTACK', { from: a, to: f, jump: { r, c } })) return;
+    const daCaster = UI.state.turn;
     pauseClockForAnimation(1400);
     const res = castDoubleAttack(UI.state, a.r, a.c, f.r, f.c, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.powerState = {}; render(); return; }
+    recordAction('POWER_CAST', daCaster, { power: 'DOUBLE_ATTACK', from: { r: a.r, c: a.c }, to: { r: f.r, c: f.c }, jump: { r, c } });
     setStatus('Double Attack!', 'ok');
     playVfxChain(a.r, a.c, f.r, f.c);
     setTimeout(() => playVfxChain(f.r, f.c, r, c), 300);
@@ -1777,9 +1829,11 @@ function showPromotePowerDialog(r, c) {
     b.addEventListener('click', () => {
       document.body.removeChild(backdrop);
       if (netInterceptPower('PROMOTE', { r, c, newType: b.dataset.piece })) return;
+      const promoCaster = UI.state.turn;
       pauseClockForAnimation(1200);
       const res = castPromote(UI.state, r, c, b.dataset.piece);
       if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; render(); return; }
+      recordAction('POWER_CAST', promoCaster, { power: 'PROMOTE', r, c, newType: b.dataset.piece });
       setStatus('Promoted!', 'ok');
       playVfx('promote', r, c);
       UI.activePower = null;
@@ -1993,7 +2047,7 @@ function showPromotionDialog(color) {
       }
       pauseClockForAnimation(800);
       const res = makeMove(UI.state, p.fr, p.fc, p.tr, p.tc, type);
-      handleMoveResult(res, p.fr, p.fc, p.tr, p.tc);
+      handleMoveResult(res, p.fr, p.fc, p.tr, p.tc, type);
     });
   });
 }
@@ -2027,16 +2081,24 @@ function showGameOverModal() {
     };
     msg = reasons[reason] || 'Victory.';
   }
+  const hasActions = UI.gameActions && UI.gameActions.length > 0;
   backdrop.innerHTML = `
     <div class="modal">
       <h2>${title}</h2>
       <p>${msg}</p>
       <div class="actions">
-        <button onclick="document.querySelector('.game-over-modal').remove()">Review</button>
+        ${hasActions ? '<button id="study-game-btn" class="study-btn">Study Game</button>' : ''}
+        <button onclick="document.querySelector('.game-over-modal').remove()">Review Board</button>
         <button class="primary" onclick="document.getElementById('new-game').click(); document.querySelector('.game-over-modal').remove();">New Game</button>
       </div>
     </div>`;
   document.body.appendChild(backdrop);
+  if (hasActions) {
+    document.getElementById('study-game-btn').addEventListener('click', () => {
+      backdrop.remove();
+      openReplay({ actions: UI.gameActions });
+    });
+  }
 }
 
 // ---------- VFX ----------
@@ -2359,6 +2421,7 @@ function startBotGame(botColor, difficulty) {
   if (NET.mode === 'online') { try { netLeave(); } catch {} }
   // Start fresh game
   UI.state = initGame();
+  UI.gameActions = [];
   UI.selected = null; UI.activePower = null; UI.powerState = {};
   UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
   buildBoard();
@@ -2384,6 +2447,7 @@ function startBotVsBotGame(whiteDiff, blackDiff, numGames, speed, showPanel) {
   if (oldPanel) oldPanel.remove();
   // Start fresh game
   UI.state = initGame();
+  UI.gameActions = [];
   UI.selected = null; UI.activePower = null; UI.powerState = {};
   UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
   buildBoard();

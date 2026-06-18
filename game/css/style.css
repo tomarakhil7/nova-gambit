@@ -452,6 +452,13 @@ button.primary {
   box-shadow: 0 0 12px rgba(80, 180, 255, 0.4);
 }
 
+button.study-btn {
+  background: linear-gradient(135deg, #ffa726, #f57c00);
+  border-color: #ffa726;
+  box-shadow: 0 0 12px rgba(255, 167, 38, 0.4);
+  font-weight: 600;
+}
+
 /* =============== Side Panels =============== */
 .side-panel {
   background: var(--bg-panel);
