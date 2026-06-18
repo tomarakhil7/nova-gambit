@@ -272,7 +272,7 @@ function botClearHistory() { BOT_MOVE_HISTORY.length = 0; }
 
 // ---------- Alpha-Beta Search (mirrors browser bot.js) ----------
 const BOT_SEARCH_DEPTH = 3;
-const BOT_ROOT_CANDIDATES = 12;
+const BOT_ROOT_CANDIDATES = 15;
 
 // Fast inner-tree move ordering (no isSquareAttacked)
 function botOrderScore(state, m, forColor) {

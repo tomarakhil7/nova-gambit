@@ -501,7 +501,7 @@ function botCountMaterial(state, color) {
 // Fast enough for browser: move ordering ensures early cutoffs, and we limit
 // the candidate set at the root to keep wall-clock under ~200ms.
 const BOT_SEARCH_DEPTH = 3; // 3-ply = my move + response + my follow-up
-const BOT_ROOT_CANDIDATES = 12; // Deep-search top N root moves (wider to avoid missing good moves)
+const BOT_ROOT_CANDIDATES = 15; // Deep-search top N root moves (wide enough to not miss retreats)
 
 // Quick move-ordering score (no board copies — pure heuristics)
 // Used in inner tree nodes: MUST be fast (no isSquareAttacked calls)
@@ -554,6 +554,18 @@ function botRootOrderScore(state, m, forColor) {
       }
     }
   }
+
+  // RETREAT BONUS: if a piece is currently attacked and moves to safety, boost it
+  if (piece.type !== PIECE.PAWN && piece.type !== PIECE.KING) {
+    const pieceVal = BOT_PIECE_VALUES[piece.type];
+    if (isSquareAttacked(state.board, m.from.r, m.from.c, opp)) {
+      // Piece is currently under attack — check if destination is safe
+      if (!isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
+        s += pieceVal * 2; // Retreating saves the piece: high priority
+      }
+    }
+  }
+
   return s;
 }
 
