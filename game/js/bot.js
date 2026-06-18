@@ -332,13 +332,14 @@ function botScoreMove(state, from, to, forColor) {
     }
   }
 
-  // CHECK BONUS: moves that give check (very important in endgame)
-  // Simulate the move to see if it gives check
-  if (phase < 0.6 || (target && target.color !== piece.color)) {
-    const snap = snapshot(state.board);
-    applyMoveRaw(state.board, from.r, from.c, { r: to.r, c: to.c, capture: !!target, castle: to.castle, enPassant: to.enPassant }, state);
-    if (isInCheck(state.board, opp)) score += phase < 0.4 ? 60 : 35;
-    restore(state.board, snap);
+  // CHECK BONUS: Lightweight heuristic — attacks near enemy king suggest check potential
+  // (Full simulation is too expensive for quick-scoring 30+ moves; deep eval catches actual checks)
+  const oppKing = findKing(state.board, opp);
+  if (oppKing) {
+    const distToKing = Math.abs(to.r - oppKing.r) + Math.abs(to.c - oppKing.c);
+    if (distToKing <= 2 && piece.type !== PIECE.PAWN && piece.type !== PIECE.KING) {
+      score += phase < 0.4 ? 40 : 20; // aggression bonus for moves near enemy king
+    }
   }
 
   return score;
@@ -355,33 +356,34 @@ function botCountMaterial(state, color) {
 }
 
 // ---------- 1-Ply Search (Hard mode) ----------
-// Evaluates position after each candidate move. Also checks for immediate checkmate.
+// PERFORMANCE OPTIMIZED: Pre-scores all moves cheaply, then only does full 1-ply
+// evaluation on the top candidates. This prevents the O(N*M) blowup that was causing
+// hard-vs-hard to take minutes per move in the browser.
+const BOT_SEARCH_CANDIDATES = 10; // Only deep-eval the top N moves (was ALL moves before)
+
 function botSearchBestMove(state, moves, forColor) {
   const opp = opposite(forColor);
   let bestMove = null, bestScore = -Infinity;
 
-  // First pass: check for instant checkmate (free win)
+  // Step 1: Quick-score all moves (cheap — no board copies needed for most)
+  const scored = [];
   for (const m of moves) {
-    const snap = snapshot(state.board);
+    let quickScore = botScoreMove(state, m.from, m.to, forColor);
+    // Bonus for captures (prioritize examining these)
+    if (m.move.capture) quickScore += 500;
+    // Bonus for promotions
     const piece = state.board[m.from.r][m.from.c];
-    const moveInfo = { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant };
-    applyMoveRaw(state.board, m.from.r, m.from.c, moveInfo, state);
-
-    // Handle pawn promotion in simulation
-    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
-      state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
-    }
-
-    if (isCheckmate(state.board, opp, state)) {
-      restore(state.board, snap);
-      return m; // Instant win!
-    }
-    restore(state.board, snap);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) quickScore += 2000;
+    scored.push({ m, quickScore });
   }
 
-  // Second pass: evaluate each move (compute move score BEFORE applying)
-  for (const m of moves) {
-    const moveScore = botScoreMove(state, m.from, m.to, forColor);
+  // Sort by quick score descending
+  scored.sort((a, b) => b.quickScore - a.quickScore);
+
+  // Step 2: Deep evaluation of top N candidates only
+  const candidates = scored.slice(0, Math.min(BOT_SEARCH_CANDIDATES, scored.length));
+
+  for (const { m } of candidates) {
     const snap = snapshot(state.board);
     const piece = state.board[m.from.r][m.from.c];
     const moveInfo = { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant };
@@ -392,22 +394,30 @@ function botSearchBestMove(state, moves, forColor) {
       state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
     }
 
-    // Penalize moves that cause stalemate (we want to win, not draw!)
-    if (isStalemate(state.board, opp, state)) {
-      restore(state.board, snap);
-      // Only penalize stalemate if we're ahead in material
+    // Check for checkmate/stalemate (only when relevant)
+    const oppInCheck = isInCheck(state.board, opp);
+    if (oppInCheck) {
+      // Giving check — see if it's checkmate (only need allLegalMoves here)
+      if (allLegalMoves(state.board, opp, state).length === 0) {
+        restore(state.board, snap);
+        return m; // Instant checkmate!
+      }
+    } else {
+      // Only check for stalemate if we're ahead (expensive call, skip otherwise)
       const myMat = botCountMaterial(state, forColor);
       const oppMat = botCountMaterial(state, opp);
       if (myMat > oppMat + 100) {
-        // Heavily penalize — stalemate when winning is terrible
-        const stalScore = -5000;
-        if (stalScore > bestScore) { bestScore = stalScore; bestMove = m; }
-        continue;
+        if (allLegalMoves(state.board, opp, state).length === 0) {
+          restore(state.board, snap);
+          const stalScore = -5000;
+          if (stalScore > bestScore) { bestScore = stalScore; bestMove = m; }
+          continue;
+        }
       }
     }
 
-    // Evaluate the resulting position + move ordering bonus
-    let evalScore = botEvaluate(state, forColor) + moveScore * 0.1;
+    // Evaluate the resulting position
+    let evalScore = botEvaluate(state, forColor);
 
     restore(state.board, snap);
 
