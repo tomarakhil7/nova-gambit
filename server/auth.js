@@ -16,6 +16,18 @@ function authEnabled() {
   return db.isEnabled() && !!JWT_SECRET;
 }
 
+function getAuthDisabledMessage() {
+  const missing = [];
+  if (!db.isEnabled()) {
+    missing.push('DATABASE_URL');
+  }
+  if (!JWT_SECRET) {
+    missing.push('JWT_SECRET');
+  }
+  if (missing.length === 0) return 'Accounts disabled on this server';
+  return `Sign-in disabled: server is missing ${missing.join(' and ')}. Add ${missing.length > 1 ? 'them' : 'it'} on Railway → Variables and redeploy.`;
+}
+
 function validateSignup(body) {
   const email = (body.email || '').trim().toLowerCase();
   const password = body.password || '';
@@ -27,7 +39,7 @@ function validateSignup(body) {
 }
 
 async function signup(body) {
-  if (!authEnabled()) return { status: 503, error: 'Accounts disabled on this server' };
+  if (!authEnabled()) return { status: 503, error: getAuthDisabledMessage() };
   const v = validateSignup(body);
   if (v.error) return { status: 400, error: v.error };
   const hash = await bcrypt.hash(v.password, BCRYPT_ROUNDS);
@@ -47,7 +59,7 @@ async function signup(body) {
 }
 
 async function login(body) {
-  if (!authEnabled()) return { status: 503, error: 'Accounts disabled on this server' };
+  if (!authEnabled()) return { status: 503, error: getAuthDisabledMessage() };
   const email = (body.email || '').trim().toLowerCase();
   const password = body.password || '';
   if (!email || !password) return { status: 400, error: 'Email and password required' };
@@ -66,7 +78,7 @@ async function login(body) {
 }
 
 async function me(token) {
-  if (!authEnabled()) return { status: 503, error: 'Accounts disabled on this server' };
+  if (!authEnabled()) return { status: 503, error: getAuthDisabledMessage() };
   const claims = verifyToken(token);
   if (!claims) return { status: 401, error: 'Invalid token' };
   try {

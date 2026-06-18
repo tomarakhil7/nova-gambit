@@ -31,6 +31,9 @@ function makePiece(type, color, opts = {}) {
     spectralExpireTurn: opts.spectralExpireTurn || 0,
     // Imprison: if captor, holds a captive piece (the full object).
     imprisoned: opts.imprisoned || null,
+    // Original starting file (set in createInitialBoard); used by Cleanse / captor-death
+    // to release prisoners to their home tile.
+    originFile: opts.originFile != null ? opts.originFile : null,
     id: opts.id || `${color}${type}${Math.random().toString(36).slice(2, 8)}`
   };
 }
@@ -44,10 +47,10 @@ function createInitialBoard() {
   const backRank = [PIECE.ROOK, PIECE.KNIGHT, PIECE.BISHOP, PIECE.QUEEN,
                     PIECE.KING, PIECE.BISHOP, PIECE.KNIGHT, PIECE.ROOK];
   for (let c = 0; c < 8; c++) {
-    board[0][c] = makePiece(backRank[c], COLOR.BLACK);
-    board[1][c] = makePiece(PIECE.PAWN, COLOR.BLACK);
-    board[6][c] = makePiece(PIECE.PAWN, COLOR.WHITE);
-    board[7][c] = makePiece(backRank[c], COLOR.WHITE);
+    board[0][c] = makePiece(backRank[c], COLOR.BLACK, { originFile: c });
+    board[1][c] = makePiece(PIECE.PAWN, COLOR.BLACK, { originFile: c });
+    board[6][c] = makePiece(PIECE.PAWN, COLOR.WHITE, { originFile: c });
+    board[7][c] = makePiece(backRank[c], COLOR.WHITE, { originFile: c });
   }
   return board;
 }
@@ -152,9 +155,12 @@ function pawnMoves(board, r, c, gameState) {
       moves.push({ r: nr, c: nc, capture: true });
     }
     // En passant — v3.2: Spectral pawns cannot EP; bomb-occupied target square blocks EP.
+    // Only valid for the player NOT owning the just-double-pushed pawn:
+    //   white captures into row 2 (rank 6); black captures into row 5 (rank 3).
     if (gameState && gameState.enPassantTarget && !piece.isSpectral) {
       const ep = gameState.enPassantTarget;
-      if (nr === ep.r && nc === ep.c && !bombAt(nr, nc)) {
+      const epRowForUs = piece.color === COLOR.WHITE ? 2 : 5;
+      if (nr === ep.r && nc === ep.c && nr === epRowForUs && !bombAt(nr, nc)) {
         moves.push({ r: nr, c: nc, capture: true, enPassant: true });
       }
     }

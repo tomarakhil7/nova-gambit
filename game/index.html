@@ -2,9 +2,23 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#06080d">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>NOVA Gambit — Aether Battle</title>
   <link rel="stylesheet" href="css/style.css">
+  <!-- Mobile board-height + scroll fix: inlined to bypass CSS caching on iOS Safari.
+       Mirrors the values in css/style.css; keep them in sync. -->
+  <style>
+    @media (max-width: 760px) {
+      html { height: auto !important; min-height: 100% !important; overflow-x: hidden !important; overflow-y: auto !important; -webkit-overflow-scrolling: touch; }
+      body { height: auto !important; min-height: 100dvh !important; overflow-x: hidden !important; overflow-y: visible !important; touch-action: pan-y; }
+      #app { display: flex !important; flex-direction: column !important; height: auto !important; min-height: 0 !important; max-height: none !important; overflow: visible !important; }
+      .board { width: min(96vw, 520px) !important; height: min(96vw, 520px) !important; min-width: min(96vw, 520px); min-height: min(96vw, 520px); aspect-ratio: unset !important; grid-template-rows: repeat(8, 1fr) !important; grid-template-columns: repeat(8, 1fr) !important; flex: 0 0 auto !important; }
+      .board-wrap { flex-shrink: 0 !important; overflow: visible !important; }
+    }
+  </style>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">

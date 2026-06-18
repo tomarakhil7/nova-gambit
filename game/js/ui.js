@@ -94,7 +94,7 @@ const POWER_DETAILS = {
     canMate: 'N/A',
     restrictions: 'Cannot target King, Spectral, captors, or an already-frozen piece. A frozen Rook blocks castling.',
     useCase: 'Disable a defender before you invade. Freeze the castling Rook to kill king safety.',
-    counter: 'Move the piece away before Frost lands; or cast Cleanse (12 Aether) to thaw it instantly.'
+    counter: 'Move the piece away before Frost lands; or cast Cleanse to thaw it instantly.'
   },
   [POWER.FORTIFY]: {
     targeting: 'One of your own pieces (not King)',
@@ -124,13 +124,13 @@ const POWER_DETAILS = {
     counter: 'Capture the Spectral Pawn or wait it out.'
   },
   [POWER.BOMBA]: {
-    targeting: 'Empty square on the row one ahead of your furthest pawn, or diagonal from one of your pawns',
+    targeting: 'PAWN-only. Empty square one rank in FRONT of one of your pawns, OR diagonally forward from it (the 3 squares in front of any of your pawns).',
     duration: 'Detonates 1 turn later',
     turnEnds: 'No — turn continues',
     canMate: 'N/A — Kings are immune to the blast',
-    restrictions: 'Blast destroys unshielded ENEMY non-Kings only. Shielded pieces absorb one blast. Kings and your own pieces are safe.',
+    restrictions: 'Only pawns may plant. Blast destroys unshielded ENEMY non-Kings only. Shielded pieces absorb one blast. Kings and your own pieces are safe.',
     useCase: 'Clear pawn clusters; area-denial the square the enemy wants to occupy.',
-    counter: 'Step any piece onto the bomb to defuse it. Fortify a threatened piece.'
+    counter: 'Step any piece onto the bomb to defuse it. Fortify a threatened piece. Out-pawn the planter so they have nothing to plant from.'
   },
   [POWER.DOUBLE_ATTACK]: {
     targeting: 'Your piece → two actions (move or capture) in sequence',
@@ -144,11 +144,11 @@ const POWER_DETAILS = {
   [POWER.IMPRISON]: {
     targeting: 'Adjacent enemy non-King piece (captor = your piece)',
     duration: 'Until the captor dies, is Cleansed, or the prisoner is otherwise freed',
-    turnEnds: 'No — turn continues',
-    canMate: 'Indirectly — captor still attacks as normal',
-    restrictions: 'Cannot imprison Frozen, Spectral, or already-captor pieces. Cannot imprison the King.',
+    turnEnds: 'No — UNLESS the cast also delivers a discovered check on the enemy King (then turn passes).',
+    canMate: 'Yes — discovered checkmate from removing the captive is allowed.',
+    restrictions: 'Cannot imprison Frozen, Spectral, or already-captor pieces. Cannot imprison the King. Cannot leave your own King in check.',
     useCase: 'Permanently sideline a Queen using a pawn. The captor can still move and attack.',
-    counter: 'Kill the captor — prisoner returns to its original starting square (destroyed if occupied). Or Cleanse to free it.'
+    counter: 'Kill the captor — prisoner returns to its OWN starting tile (e.g. b8 knight → b8). If the home tile is occupied the prisoner waits OFF-BOARD until that square is free, then re-enters. Or Cleanse to free it.'
   },
   [POWER.AETHER_BLOCK]: {
     targeting: 'Opponent (no board target)',
@@ -162,11 +162,11 @@ const POWER_DETAILS = {
   [POWER.CLEANSE]: {
     targeting: 'Any piece (yours or enemy) carrying Imprison or Frost',
     duration: 'Instant',
-    turnEnds: 'No — turn continues',
-    canMate: 'N/A',
-    restrictions: 'Cannot target King. Must be cleansing something (piece must be frozen or a captor).',
+    turnEnds: 'No — UNLESS the cast also gives check (then turn passes).',
+    canMate: 'Indirect — releasing a piece can deliver discovered check or mate.',
+    restrictions: 'Cannot target King. Must be cleansing something (piece must be frozen or a captor). Cannot leave your own King in check.',
     useCase: 'Free a strong piece caught in an Imprison cage. Thaw a frozen Rook to castle again.',
-    counter: 'Re-apply the effect next turn. Aether Block the caster to deny Cleanse.'
+    counter: 'Re-apply the effect next turn. Aether Block the caster to deny Cleanse. The released prisoner returns to its OWN starting tile (b8 knight → b8); if that tile is occupied it waits OFF-BOARD and re-enters automatically when the home tile frees up.'
   },
   [POWER.PROMOTE]: {
     targeting: 'Any of your pawns (not Spectral)',
@@ -178,13 +178,13 @@ const POWER_DETAILS = {
     counter: 'Aether Block; Frost the pawn pre-emptively so promotion is wasted.'
   },
   [POWER.CHRONOBREAK]: {
-    targeting: 'No target (rewinds opponent\'s last move)',
+    targeting: 'No target — rewinds opponent\'s ENTIRE previous turn',
     duration: 'Instant',
     turnEnds: 'No — turn continues',
     canMate: 'N/A',
-    restrictions: 'Cannot be cast on turn 1. Cannot Chronobreak a Chronobreak. Opponent keeps the Aether they spent.',
-    useCase: 'Undo a catastrophic blunder. Restore an imprisoned piece.',
-    counter: 'Force opponent to use it defensively before your ultimate lands.'
+    restrictions: 'Cannot be cast on turn 1. Cannot Chronobreak a Chronobreak. CANNOT undo a checkmate (game is already over). Opponent keeps the Aether they spent.',
+    useCase: 'Undo a catastrophic blunder. Restore an imprisoned piece. Reverse a Bomba plant, Imprison cage, Frost, or Promote.',
+    counter: 'Force opponent to use it defensively before your ultimate lands. Aether Block the caster to deny Chronobreak.'
   },
   [POWER.VENGEANCE]: {
     targeting: 'Any enemy non-King piece on the board',
@@ -530,9 +530,10 @@ function openReplay(game) {
       if (from && typeof from.r === 'number') boardEl.querySelector(`.rp-square[data-r="${from.r}"][data-c="${from.c}"]`)?.classList.add('last-move');
       if (to && typeof to.r === 'number' && typeof to.c === 'number') boardEl.querySelector(`.rp-square[data-r="${to.r}"][data-c="${to.c}"]`)?.classList.add('last-move');
     }
-    // Move log
+    // Move log — uses the snapshot BEFORE each action so we know which piece moved
     moveLogEl.innerHTML = actions.map((a, i2) => {
-      const label = formatAction(a);
+      const prev = snapshots[i2];
+      const label = formatAction(a, prev);
       const cls = i2 === idx - 1 ? 'rp-move active' : 'rp-move';
       return `<div class="${cls}" data-i="${i2}">${i2 + 1}. <b>${a.by === 'w' ? 'W' : 'B'}</b> ${escapeHtml(label)}</div>`;
     }).join('');
@@ -610,31 +611,103 @@ function applyReplayAction(s, a) {
   }
 }
 
-function formatAction(a) {
+// Look up the piece type/color on a snapshot board (for replay logs).
+function snapPieceAt(snap, r, c) {
+  if (!snap || !snap.board) return null;
+  const row = snap.board[r];
+  return row ? row[c] : null;
+}
+function pieceShortName(t) {
+  return ({ K:'King', Q:'Queen', R:'Rook', B:'Bishop', N:'Knight', P:'Pawn' })[t] || t;
+}
+
+// `prevSnap` is the position BEFORE this action — needed to identify the moving piece.
+// v3.5: render rich, detailed lines so the live log + replay log fully describe
+// every step of every turn (piece type, source, target, capture, promotion, etc.)
+function formatAction(a, prevSnap) {
   const p = a.payload || {};
   if (a.type === 'MOVE') {
-    return `move ${algebraic(p.from.r, p.from.c)} → ${algebraic(p.to.r, p.to.c)}${p.promotion ? ' = ' + p.promotion : ''}`;
+    const piece = prevSnap ? snapPieceAt(prevSnap, p.from.r, p.from.c) : null;
+    const captured = prevSnap ? snapPieceAt(prevSnap, p.to.r, p.to.c) : null;
+    const name = piece ? pieceShortName(piece.type) : '';
+    // Detect castle by king moving 2 files
+    if (piece && piece.type === 'K' && Math.abs(p.to.c - p.from.c) === 2) {
+      return p.to.c > p.from.c ? 'O-O (kingside castle)' : 'O-O-O (queenside castle)';
+    }
+    const sep = captured ? '×' : '→';
+    let line = `${name} ${algebraic(p.from.r, p.from.c)}${sep}${algebraic(p.to.r, p.to.c)}`.trim();
+    if (captured) line += ` (took ${captured.color === 'w' ? 'W' : 'B'} ${pieceShortName(captured.type)})`;
+    if (p.promotion) line += ` = ${pieceShortName(p.promotion)}`;
+    return line;
   }
-  if (a.type === 'SACRIFICE') return `⚔ sacrifice ${algebraic(p.r, p.c)}`;
+  if (a.type === 'SACRIFICE') {
+    const piece = prevSnap ? snapPieceAt(prevSnap, p.r, p.c) : null;
+    return `⚔ Sacrifice ${piece ? pieceShortName(piece.type)+' ' : ''}${algebraic(p.r, p.c)}`;
+  }
   if (a.type === 'RESIGN') return 'resigned';
   if (a.type === 'POWER_CAST') {
     const name = POWER_DISPLAY_NAMES[p.power] || (p.power || '').toLowerCase();
+    const ico = POWER_ICONS[p.power] || '';
     if (p.power === 'DOUBLE_ATTACK' && p.from && p.to && p.jump) {
-      return `⚔ ${name}: ${algebraic(p.from.r, p.from.c)} → ${algebraic(p.to.r, p.to.c)} → ${algebraic(p.jump.r, p.jump.c)}`;
+      const piece = prevSnap ? snapPieceAt(prevSnap, p.from.r, p.from.c) : null;
+      const tgt1 = prevSnap ? snapPieceAt(prevSnap, p.to.r, p.to.c) : null;
+      const tgt2 = prevSnap ? snapPieceAt(prevSnap, p.jump.r, p.jump.c) : null;
+      const lbl = piece ? pieceShortName(piece.type) + ' ' : '';
+      const sep1 = tgt1 ? '×' : '→';
+      const sep2 = tgt2 ? '×' : '→';
+      return `${ico} ${name}: ${lbl}${algebraic(p.from.r, p.from.c)}${sep1}${algebraic(p.to.r, p.to.c)}${sep2}${algebraic(p.jump.r, p.jump.c)}`;
     }
     if (p.power === 'IMPRISON' && p.captor && p.captive) {
-      return `⛓ ${name}: ${algebraic(p.captor.r, p.captor.c)} cages ${algebraic(p.captive.r, p.captive.c)}`;
+      const captor = prevSnap ? snapPieceAt(prevSnap, p.captor.r, p.captor.c) : null;
+      const captive = prevSnap ? snapPieceAt(prevSnap, p.captive.r, p.captive.c) : null;
+      const captorL = captor ? pieceShortName(captor.type) : '';
+      const captiveL = captive ? pieceShortName(captive.type) : '';
+      return `${ico} ${name}: ${captorL} ${algebraic(p.captor.r, p.captor.c)} cages ${captiveL} ${algebraic(p.captive.r, p.captive.c)}`;
     }
     if (p.power === 'BLINK' && p.from && p.to) {
-      return `✦ ${name}: ${algebraic(p.from.r, p.from.c)} → ${algebraic(p.to.r, p.to.c)}`;
+      const piece = prevSnap ? snapPieceAt(prevSnap, p.from.r, p.from.c) : null;
+      const lbl = piece ? pieceShortName(piece.type) + ' ' : '';
+      return `${ico} ${name}: ${lbl}${algebraic(p.from.r, p.from.c)}→${algebraic(p.to.r, p.to.c)}`;
     }
     if (p.power === 'PROMOTE' && typeof p.r === 'number') {
-      return `♛ ${name}: ${algebraic(p.r, p.c)} → ${p.newType || 'Q'}`;
+      return `${ico} ${name}: pawn ${algebraic(p.r, p.c)} → ${pieceShortName(p.newType || 'Q')}`;
     }
-    if (p.power === 'AETHER_BLOCK') return `⊘ ${name}`;
-    if (p.power === 'CHRONOBREAK') return `↺ ${name}`;
-    if (typeof p.r === 'number') return `${POWER_ICONS[p.power] || ''} ${name} @ ${algebraic(p.r, p.c)}`.trim();
-    return name;
+    if (p.power === 'AETHER_BLOCK') return `${ico} ${name}: opponent silenced next turn`;
+    if (p.power === 'CHRONOBREAK') return `${ico} ${name}: opponent's turn rewound (moves + powers)`;
+    if (p.power === 'VENGEANCE' && typeof p.r === 'number') {
+      const tgt = prevSnap ? snapPieceAt(prevSnap, p.r, p.c) : null;
+      const lbl = tgt ? `${tgt.color === 'w' ? 'W' : 'B'} ${pieceShortName(tgt.type)} ` : '';
+      return `${ico} ${name}: destroyed ${lbl}${algebraic(p.r, p.c)}`;
+    }
+    if (p.power === 'FROST' && typeof p.r === 'number') {
+      const tgt = prevSnap ? snapPieceAt(prevSnap, p.r, p.c) : null;
+      const lbl = tgt ? `${tgt.color === 'w' ? 'W' : 'B'} ${pieceShortName(tgt.type)} ` : '';
+      return `${ico} ${name}: ${lbl}${algebraic(p.r, p.c)} frozen 1 turn`;
+    }
+    if (p.power === 'FORTIFY' && typeof p.r === 'number') {
+      const tgt = prevSnap ? snapPieceAt(prevSnap, p.r, p.c) : null;
+      return `${ico} ${name}: shielded ${tgt ? pieceShortName(tgt.type)+' ' : ''}${algebraic(p.r, p.c)}`;
+    }
+    if (p.power === 'SPAWN' && typeof p.r === 'number') {
+      return `${ico} ${name}: Spectral Pawn at ${algebraic(p.r, p.c)}`;
+    }
+    if (p.power === 'BOMBA' && typeof p.r === 'number') {
+      return `${ico} ${name}: bomb planted at ${algebraic(p.r, p.c)} (detonates next turn)`;
+    }
+    if (p.power === 'CLEANSE' && typeof p.r === 'number') {
+      const tgt = prevSnap ? snapPieceAt(prevSnap, p.r, p.c) : null;
+      return `${ico} ${name}: ${tgt ? pieceShortName(tgt.type)+' ' : ''}${algebraic(p.r, p.c)}`;
+    }
+    if (p.power === 'WALL' && typeof p.r === 'number') {
+      const tgt = prevSnap ? snapPieceAt(prevSnap, p.r, p.c) : null;
+      return `${ico} ${name}: anchor ${tgt ? pieceShortName(tgt.type)+' ' : ''}${algebraic(p.r, p.c)} → pawn ring`;
+    }
+    if (typeof p.r === 'number') {
+      const piece = prevSnap ? snapPieceAt(prevSnap, p.r, p.c) : null;
+      const lbl = piece ? pieceShortName(piece.type) + ' ' : '';
+      return `${ico} ${name} @ ${lbl}${algebraic(p.r, p.c)}`.trim();
+    }
+    return `${ico} ${name}`.trim();
   }
   return a.type;
 }
@@ -1424,37 +1497,47 @@ function handlePowerClick(r, c) {
   if (p === POWER.FROST) {
     if (netInterceptPower('FROST', { r, c })) return;
     const res = castFrost(UI.state, r, c);
-    if (res.error) { setStatus(res.error, 'err'); return; }
-    setStatus('Frost applied.', 'ok');
+    if (res.error) {
+      setStatus(res.error, 'err');
+      // Clear the power selection so the player can immediately pick another.
+      UI.activePower = null; UI.powerState = {}; render();
+      return;
+    }
+    setStatus(res.passedTurn ? 'Frost applied — opponent in check, turn passes.' : 'Frost applied.', 'ok');
     playVfx('frost', r, c);
-    UI.activePower = null; render(); return;
+    if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
+    UI.activePower = null; UI.powerState = {}; render(); return;
   }
 
   if (p === POWER.FORTIFY) {
+    const piece = UI.state.board[r][c];
+    if (piece && piece.type === PIECE.KING) { setStatus('Powers cannot target the King.', 'err'); return; }
     if (netInterceptPower('FORTIFY', { r, c })) return;
     const res = castFortify(UI.state, r, c);
-    if (res.error) { setStatus(res.error, 'err'); return; }
-    setStatus('Fortified.', 'ok');
+    if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
+    setStatus(res.passedTurn ? 'Fortified — opponent in check, turn passes.' : 'Fortified.', 'ok');
     playVfx('fortify', r, c);
-    UI.activePower = null; render(); return;
+    if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
+    UI.activePower = null; UI.powerState = {}; render(); return;
   }
 
   if (p === POWER.SPAWN) {
     if (netInterceptPower('SPAWN', { r, c })) return;
     const res = castSpawn(UI.state, r, c);
-    if (res.error) { setStatus(res.error, 'err'); return; }
-    setStatus('Spectral Pawn summoned.', 'ok');
+    if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
+    setStatus(res.passedTurn ? 'Spectral Pawn — opponent in check, turn passes.' : 'Spectral Pawn summoned.', 'ok');
     playVfx('spawn', r, c);
-    UI.activePower = null; render(); return;
+    if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
+    UI.activePower = null; UI.powerState = {}; render(); return;
   }
 
   if (p === POWER.BOMBA) {
     if (netInterceptPower('BOMBA', { r, c })) return;
     const res = castBomba(UI.state, r, c);
-    if (res.error) { setStatus(res.error, 'err'); return; }
+    if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
     setStatus('Bomba planted.', 'ok');
     playVfx('bomb-plant', r, c);
-    UI.activePower = null; render(); return;
+    UI.activePower = null; UI.powerState = {}; render(); return;
   }
 
   if (p === POWER.VENGEANCE) {
@@ -1470,6 +1553,8 @@ function handlePowerClick(r, c) {
   }
 
   if (p === POWER.WALL) {
+    const piece = UI.state.board[r][c];
+    if (piece && piece.type === PIECE.KING) { setStatus('King cannot anchor The Wall.', 'err'); return; }
     if (netInterceptPower('WALL', { r, c })) return;
     pauseClockForAnimation(1800);
     const res = castWall(UI.state, r, c);
@@ -1494,8 +1579,21 @@ function handlePowerClick(r, c) {
     if (!UI.powerState.src) {
       const piece = UI.state.board[r][c];
       if (!piece || piece.color !== UI.state.turn) { setStatus('Select your piece.', 'warn'); return; }
+      if (piece.type === PIECE.KING) { setStatus('King cannot Blink.', 'err'); return; }
       UI.powerState.src = { r, c };
-      setStatus('Select destination.', 'ok'); render(); return;
+      setStatus('Select an empty destination in the 3×3 grid.', 'ok'); render(); return;
+    }
+    // Validate destination is within the (possibly shifted) 3×3 grid before sending.
+    {
+      const src = UI.powerState.src;
+      const top  = Math.max(0, Math.min(src.r - 1, 5));
+      const left = Math.max(0, Math.min(src.c - 1, 5));
+      const inBox = (r >= top && r < top + 3 && c >= left && c < left + 3);
+      if (!inBox || (r === src.r && c === src.c)) {
+        setStatus('Blink range is a 3×3 grid around the piece.', 'err');
+        return;
+      }
+      if (UI.state.board[r][c]) { setStatus('Destination must be empty.', 'err'); return; }
     }
     if (netInterceptPower('BLINK', { from: UI.powerState.src, to: { r, c } })) return;
     pauseClockForAnimation(1200);
@@ -1510,30 +1608,62 @@ function handlePowerClick(r, c) {
   }
 
   if (p === POWER.CLEANSE) {
+    const target = UI.state.board[r][c];
+    // Pre-confirm: if the target is a captor, show where the prisoner will return
+    // (or warn that the home tile is occupied). Mirrors engine logic in
+    // releasePrisonerToHome — pick the canonical home tile for the piece type,
+    // tie-broken by nearest-home-file to the captor's column.
+    if (target && target.imprisoned) {
+      const pris = target.imprisoned;
+      const homeR = pris.color === COLOR.WHITE ? 7 : 0;
+      // v3.5: prisoner returns to its OWN starting tile. originFile literally maps
+      // to the start file (e.g. b8 knight → b8).
+      let homeC;
+      if (pris.originFile != null) {
+        homeC = pris.originFile;
+      } else {
+        const homesByType = { R:[0,7], N:[1,6], B:[2,5], Q:[3], K:[4], P:[4] };
+        const homes = homesByType[pris.type] || [4];
+        homeC = homes.reduce((best, f) => Math.abs(f - c) < Math.abs(best - c) ? f : best, homes[0]);
+      }
+      const tile = algebraic(homeR, homeC);
+      const occupied = !!UI.state.board[homeR][homeC];
+      const msg = occupied
+        ? `Cleanse: ${pris.color === COLOR.WHITE ? 'White' : 'Black'} ${pieceShortName(pris.type)}'s home tile ${tile} is occupied — the prisoner will WAIT OFF-BOARD and re-enter the moment ${tile} is free. Continue?`
+        : `Cleanse: ${pris.color === COLOR.WHITE ? 'White' : 'Black'} ${pieceShortName(pris.type)} will return to ${tile}. Continue?`;
+      if (!confirm(msg)) { UI.activePower = null; UI.powerState = {}; render(); return; }
+    }
     if (netInterceptPower('CLEANSE', { r, c })) return;
     const res = castCleanse(UI.state, r, c);
-    if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; render(); return; }
+    if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
     setStatus('Cleanse!', 'ok');
-    playVfx('fortify', r, c);  // reuse shield VFX for now
+    playVfx('fortify', r, c);
     if (res.released) {
       if (res.released.placed) setStatus(`Cleanse: prisoner returned to ${algebraic(res.released.r, res.released.c)}.`, 'ok');
-      else setStatus('Cleanse: prisoner destroyed — home tile was occupied.', 'warn');
+      else if (res.released.pending) setStatus(`Cleanse: prisoner waiting off-board — home tile occupied. Will re-enter when free.`, 'warn');
+      else setStatus('Cleanse: prisoner could not be returned.', 'warn');
     }
-    UI.activePower = null; render(); return;
+    if (res.passedTurn) {
+      setStatus('Cleanse — opponent in check, turn passes.', 'ok');
+      if (!UI.state.winner) switchClockTo(UI.state.turn);
+    }
+    UI.activePower = null; UI.powerState = {}; render(); return;
   }
 
   if (p === POWER.IMPRISON) {
     if (!UI.powerState.captor) {
       const piece = UI.state.board[r][c];
       if (!piece || piece.color !== UI.state.turn) { setStatus('Select your captor piece.', 'warn'); return; }
+      if (piece.type === PIECE.KING) { setStatus('King cannot use powers.', 'err'); return; }
       UI.powerState.captor = { r, c };
       setStatus('Select adjacent enemy to imprison.', 'ok'); render(); return;
     }
     if (netInterceptPower('IMPRISON', { captor: UI.powerState.captor, captive: { r, c } })) return;
     const res = castImprison(UI.state, UI.powerState.captor.r, UI.powerState.captor.c, r, c);
     if (res.error) { setStatus(res.error, 'err'); UI.powerState = {}; return; }
-    setStatus('Imprisoned.', 'ok');
+    setStatus(res.passedTurn ? 'Imprisoned — discovered check! Turn passes.' : 'Imprisoned.', 'ok');
     playVfx('imprison', r, c);
+    if (res.passedTurn && !UI.state.winner) switchClockTo(UI.state.turn);
     UI.activePower = null; UI.powerState = {};
     render(); return;
   }
@@ -1596,6 +1726,39 @@ function showPromotePowerDialog(r, c) {
   });
 }
 
+// Blink helpers — used to prune the UI hint set. Mirror the engine's validation
+// (3×3 surround, empty destination, no self-check, no mate) so we never paint
+// a square the engine would reject.
+function isLegalBlinkLanding(fromR, fromC, toR, toC, color) {
+  if (!UI.state || !UI.state.board) return false;
+  if (UI.state.board[toR][toC]) return false;
+  if (toR === fromR && toC === fromC) return false;
+  const top  = Math.max(0, Math.min(fromR - 1, 5));
+  const left = Math.max(0, Math.min(fromC - 1, 5));
+  if (toR < top || toR >= top + 3 || toC < left || toC >= left + 3) return false;
+  // Simulate to reject self-check and check-mate-by-Blink (Blink can't deliver mate).
+  const piece = UI.state.board[fromR][fromC];
+  if (!piece) return false;
+  const snap = snapshot(UI.state.board);
+  UI.state.board[toR][toC] = piece;
+  UI.state.board[fromR][fromC] = null;
+  const selfCheck = isInCheck(UI.state.board, color);
+  const oppMate = !selfCheck && isCheckmate(UI.state.board, opposite(color), UI.state);
+  restore(UI.state.board, snap);
+  return !selfCheck && !oppMate;
+}
+
+function hasAnyBlinkDestination(r, c, color) {
+  const top  = Math.max(0, Math.min(r - 1, 5));
+  const left = Math.max(0, Math.min(c - 1, 5));
+  for (let nr = top; nr < top + 3; nr++) for (let nc = left; nc < left + 3; nc++) {
+    if (nr === r && nc === c) continue;
+    if (UI.state.board[nr][nc]) continue;
+    if (isLegalBlinkLanding(r, c, nr, nc, color)) return true;
+  }
+  return false;
+}
+
 function computePowerTargets() {
   const p = UI.activePower;
   const targets = [];
@@ -1614,16 +1777,32 @@ function computePowerTargets() {
   } else if (p === POWER.FORTIFY) {
     for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
       const piece = UI.state.board[r][c];
-      if (piece && piece.color === color && piece.shieldHP === 0 && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
+      if (piece && piece.color === color && piece.type !== PIECE.KING && piece.shieldHP === 0 && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
     }
   } else if (p === POWER.BLINK) {
     if (!UI.powerState.src) {
+      // Step 1: highlight ONLY the player's own pieces that have at least one
+      // legal blink destination (empty square in their 3×3 surround) AND that
+      // wouldn't leave the King in check. Avoids painting half the board.
       for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
         const piece = UI.state.board[r][c];
-        if (piece && piece.color === color && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
+        if (!piece || piece.color !== color || piece.type === PIECE.KING) continue;
+        if (piece.isSpectral || piece.imprisoned) continue;
+        if (piece.frozenUntil && piece.frozenUntil > UI.state.turnNumber) continue;
+        if (hasAnyBlinkDestination(r, c, color)) targets.push({r, c});
       }
     } else {
-      for (let r=0;r<8;r++) for (let c=0;c<8;c++) if (!UI.state.board[r][c]) targets.push({r,c});
+      // Step 2: ONLY empty squares within the (possibly shifted) 3×3 grid that
+      // would also be a *legal* blink (no self-check, no mate). The engine still
+      // validates on cast — this just trims the highlight set the user sees.
+      const src = UI.powerState.src;
+      const top  = Math.max(0, Math.min(src.r - 1, 5));
+      const left = Math.max(0, Math.min(src.c - 1, 5));
+      for (let r = top; r < top + 3; r++) for (let c = left; c < left + 3; c++) {
+        if (r === src.r && c === src.c) continue;
+        if (UI.state.board[r][c]) continue;
+        if (isLegalBlinkLanding(src.r, src.c, r, c, color)) targets.push({ r, c });
+      }
     }
   } else if (p === POWER.SPAWN) {
     for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
@@ -1648,7 +1827,7 @@ function computePowerTargets() {
     if (!UI.powerState.captor) {
       for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
         const piece = UI.state.board[r][c];
-        if (piece && piece.color === color && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
+        if (piece && piece.color === color && piece.type !== PIECE.KING && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
       }
     } else {
       const c0 = UI.powerState.captor;
@@ -1665,7 +1844,7 @@ function computePowerTargets() {
     if (!UI.powerState.attacker) {
       for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
         const piece = UI.state.board[r][c];
-        if (piece && piece.color === color && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
+        if (piece && piece.color === color && piece.type !== PIECE.KING && !piece.isSpectral && !piece.imprisoned) targets.push({r,c});
       }
     } else if (!UI.powerState.first) {
       const a = UI.powerState.attacker;
@@ -1695,7 +1874,7 @@ function computePowerTargets() {
   } else if (p === POWER.WALL) {
     for (let r=0;r<8;r++) for (let c=0;c<8;c++) {
       const piece = UI.state.board[r][c];
-      if (piece && piece.color === color && !piece.isSpectral) targets.push({r,c});
+      if (piece && piece.color === color && piece.type !== PIECE.KING && !piece.isSpectral) targets.push({r,c});
     }
   }
 

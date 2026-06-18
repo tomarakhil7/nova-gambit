@@ -35,7 +35,11 @@ const PORT = process.env.PORT || 8765;
 const CLIENT_DIR = path.join(__dirname, '..', 'game');
 const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
 const ROOM_CODE_LEN = 5;
-const DISCONNECT_GRACE_MS = 5 * 60_000;  // 5 minutes — backgrounded tabs & flaky wifi
+// Grace window for a player to come back after their socket dies. Untimed games
+// get a much larger window because there is no clock pressure — a player may
+// background a tab for a long time, walk away, etc.
+const DISCONNECT_GRACE_MS_TIMED   = 5 * 60_000;        // 5 minutes
+const DISCONNECT_GRACE_MS_UNTIMED = 24 * 60 * 60_000;  // 24 hours
 const IDLE_ROOM_TTL_MS = 10 * 60_000;
 const RATE_LIMIT = { WINDOW_MS: 10_000, MAX: 30 };
 
@@ -180,11 +184,12 @@ function publicPlayer(p) {
 }
 
 function stripStateForWire(state) {
-  // Strip bulky fields
+  // Strip bulky fields. Keep a generous log window so piece-move entries don't get
+  // pushed out by per-turn aether/start-of-turn chatter (each turn can add 2-3 lines).
   const { history, log, ...rest } = state;
   return {
     ...rest,
-    log: (log || []).slice(-30)
+    log: (log || []).slice(-200)
   };
 }
 
@@ -475,7 +480,11 @@ function handleLeaveRoom(ws) {
     // also reset lastTickTime so the next tick doesn't bill them for the gap before
     // the pause took effect.
     if (room.clock) room.clock.lastTickTime = Date.now();
-    // Grace period for reconnect.
+    // Grace period for reconnect. Untimed games get a 24h window since there is
+    // no clock pressure forcing a quick return. Timed games still abandon after 5min.
+    const grace = (room.timeMode === 'untimed')
+      ? DISCONNECT_GRACE_MS_UNTIMED
+      : DISCONNECT_GRACE_MS_TIMED;
     // Only award win to the other player if THEY are still connected — otherwise both
     // are gone (e.g., server hiccup) and whoever reconnects first deserves the game back.
     room.disconnectTimers[info.color] = setTimeout(() => {
@@ -493,7 +502,7 @@ function handleLeaveRoom(ws) {
         }
         delete room.disconnectTimers[info.color];
       }
-    }, DISCONNECT_GRACE_MS);
+    }, grace);
     broadcastRoomState(room, { event: 'DISCONNECTED', color: info.color });
   }
   socketToPlayer.delete(ws);
@@ -562,13 +571,13 @@ wss.on('connection', (ws) => {
 });
 
 // WebSocket heartbeat: ping every 30s. Only terminate sockets that missed
-// TWO consecutive pongs (≈60s silence) — tolerates transient network hiccups
-// and avoids false positives from backgrounded tabs that briefly pause I/O.
+// FOUR consecutive pongs (≈120s silence) — tolerates browser tab background
+// throttling, transient network hiccups, and OS sleep/wake cycles.
 setInterval(() => {
   wss.clients.forEach((ws) => {
     if (ws.isAlive === false) {
       ws.missedPongs = (ws.missedPongs || 0) + 1;
-      if (ws.missedPongs >= 2) {
+      if (ws.missedPongs >= 4) {
         try { ws.terminate(); } catch {}
         return;
       }

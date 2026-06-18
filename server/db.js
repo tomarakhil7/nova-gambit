@@ -21,6 +21,8 @@ if (!disabled) {
     ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false }
   });
   pool.on('error', (err) => console.error('[db] idle client error', err));
+} else {
+  console.error('[db] DATABASE_URL is not set — sign-in and game history will be disabled');
 }
 
 // ---------- Schema ----------
@@ -103,7 +105,8 @@ async function init() {
     console.log('[db] connected and migrated');
     return true;
   } catch (e) {
-    console.error('[db] init failed:', e.message);
+    console.error('[db] DATABASE_URL is set but connection/migration failed:', e.message);
+    console.error('[db] Check that DATABASE_URL is valid and the database is accessible');
     disabled = true; // fall back to no-DB mode so the server still boots
     return false;
   }

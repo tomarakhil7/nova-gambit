@@ -42,17 +42,35 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
-  height: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
   font-size: 14px;
-  overflow: hidden;
+  /* Let the document itself scroll. Do NOT set overflow-y on html/body —
+     iOS Safari treats body as a scroll trap and the page gets clipped. */
+  overflow-x: hidden;
+}
+
+html {
+  /* iOS Safari: ensure the document is the scroll container. height: auto on
+     html lets natural document flow drive scroll, while overflow: visible (not
+     hidden) on body lets the html-level scroll engage. */
+  height: auto;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   background: var(--bg-grad);
-  background-attachment: fixed;
+  /* `background-attachment: fixed` causes layout/scroll bugs on iOS. Skip it. */
+  /* Use dvh (dynamic viewport height) so iOS address-bar collapse/expand
+     doesn't cause a content-height mismatch that hides the bottom rows of
+     the board. Falls back to 100vh on older browsers. */
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: auto;
+  overflow-x: hidden;
+  /* Respect iOS safe-area insets (notch / home indicator) */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 /* Animated starfield background */
@@ -105,6 +123,255 @@ body::before {
     gap: 10px;
   }
   .board-wrap { min-width: 0; }
+}
+
+/* ===== Tablet portrait & small laptops (<= 820px) ===== */
+@media (max-width: 820px) {
+  #app { gap: 8px; padding: 8px; }
+  header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  header h1 { font-size: 18px; letter-spacing: 2px; }
+  header .turn-indicator { font-size: 11px; padding: 4px 10px; }
+  header .controls {
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: flex-start;
+  }
+  button { padding: 7px 10px; font-size: 11px; }
+  .time-select { font-size: 11px; }
+  .board { width: min(560px, 92vw); height: auto; aspect-ratio: 1 / 1; }
+  .power-deck { width: min(560px, 92vw); }
+  .power-cards {
+    /* Wrap 13 cards onto 2 rows on narrow screens. */
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .card-name { font-size: 7px; letter-spacing: 0.5px; }
+  .card-cost { font-size: 10px; }
+  .legend { padding: 10px; }
+  .replay-stage {
+    grid-template-columns: 1fr;
+  }
+  .replay-side { max-height: 260px; }
+}
+
+/* ===== Phones (<= 760px) — board-first stacked layout ===== */
+@media (max-width: 760px) {
+  /* Force a flex column layout so we can re-order children with `order:`.
+     The default grid layout buries the board below the left side-panel.
+     iOS Safari needs a clean scroll chain — body MUST be the natural scroll
+     surface (no overflow:hidden, no fixed height, no -webkit-overflow-scrolling
+     trap). Don't force overflow-y: scroll on html — it can race with iOS's
+     auto-scroll heuristics and freeze touch panning when content === viewport. */
+  html {
+    height: auto !important;
+    min-height: 100% !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  body {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+    position: static !important;
+    /* Prevent body itself from claiming the touchmove. */
+    touch-action: pan-y;
+  }
+  #app {
+    display: flex !important;
+    flex-direction: column !important;
+    grid-template-columns: none !important;
+    grid-template-rows: none !important;
+    gap: 8px;
+    padding: 8px;
+    /* Critical: NO height/min-height constraints — let content drive total
+       height so the page scrolls naturally. */
+    min-height: 0 !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+  /* Inner side-panels must NOT trap touch scroll — let touchmove bubble to body. */
+  .side-panel { overflow: visible !important; }
+
+  /* Stack order: header → board → power deck → players + active effects → log → status */
+  header                  { order: 0; }
+  .board-wrap             { order: 1; align-self: center; width: 100%; }
+  /* The power deck sits inside .board-wrap already, so it follows the board. */
+  .side-panel.left        { order: 2; }
+  .side-panel.right       { order: 3; }
+  .status-bar             { order: 4; }
+
+  header { padding: 8px 10px; flex-wrap: wrap; gap: 6px; }
+  header h1 { font-size: 16px; letter-spacing: 1.5px; }
+  header h1::before { margin-right: 4px; }
+  header .turn-indicator {
+    order: 3;
+    width: 100%;
+    text-align: center;
+    font-size: 10px;
+    padding: 3px 8px;
+  }
+  header .controls {
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 6px;
+    justify-content: flex-start;
+  }
+  button { padding: 7px 9px; font-size: 11px; min-height: 34px; }
+  .time-select { font-size: 11px; padding: 6px 8px; }
+
+  /* Board sized to viewport width so it's the first thing on screen. */
+  .board-wrap {
+    gap: 6px;
+    flex-shrink: 0;       /* never let the column flex squeeze the board */
+    overflow: visible !important;
+  }
+  .board {
+    /* On phones: use vw (capped) for BOTH dimensions and equal-fraction grid
+       rows. iOS Safari has had bugs with `aspect-ratio` on grid containers and
+       with `repeat(8, 12.5%)` collapsing — `1fr` resolves against the explicit
+       container height, which is rock-solid. min-height guards against the
+       known 0-height-collapse seen on some iPhones when an ancestor is flex.
+       max() pinning for max viewport prevents the board from shrinking when
+       Safari's address bar resizes the viewport (100vh issue). */
+    width: min(96vw, 520px) !important;
+    height: min(96vw, 520px) !important;
+    min-width: min(96vw, 520px);
+    min-height: min(96vw, 520px);
+    flex: 0 0 auto;
+    aspect-ratio: unset !important;
+    grid-template-rows: repeat(8, 1fr) !important;
+    grid-template-columns: repeat(8, 1fr) !important;
+  }
+  .square { font-size: clamp(22px, 9vw, 40px); }
+  .coords { font-size: 8px; }
+
+  .power-deck { width: min(96vw, 520px); margin-top: 4px; }
+  .power-cards {
+    /* 13 cards in 2 rows on small tablets, will tighten further on phones. */
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .card-name { font-size: 7px; letter-spacing: 0.4px; padding: 2px 1px 3px; }
+  .card-cost { font-size: 9px; padding: 0 4px; min-width: 16px; }
+  .card-icon { font-size: clamp(14px, 4.2vw, 22px); margin-top: 8px; }
+  .deck-controls { gap: 6px; padding: 0; flex-wrap: wrap; }
+  .deck-hint { display: none; }
+  .sacrifice-card { padding: 7px 12px; font-size: 11px; }
+
+  /* Side panels: become single column. Default grid-from-laptop overrides → reset. */
+  .side-panel {
+    display: flex;
+    flex-direction: column;
+    padding: 10px;
+    gap: 8px;
+    overflow-y: visible;
+  }
+  .side-panel.left,
+  .side-panel.right {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Compact player cards: side-by-side row when there's space. */
+  .side-panel.left {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .side-panel.left > .player-card {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 140px;
+  }
+  /* Hide the static reference legends on phones — keep only "Active Effects". */
+  .side-panel.left > .legend:nth-of-type(1),  /* Board */
+  .side-panel.left > .legend:nth-of-type(2),  /* Piece Status */
+  .side-panel.left > .legend:nth-of-type(4) { /* Sacrifice */
+    display: none;
+  }
+  .side-panel.left > .legend { flex: 1 1 100%; }
+  .player-card { padding: 9px; }
+  .player-name { font-size: 12px; gap: 6px; flex-wrap: wrap; }
+  .clock-display { font-size: 14px; }
+  .aether-label { font-size: 10px; margin-bottom: 4px; }
+  .aether-bar { height: 14px; }
+  .aether-bar .label { font-size: 10px; }
+
+  .panel-header { font-size: 11px; }
+  .log-panel {
+    max-height: 220px;
+    min-height: 80px;
+    font-size: 11px;
+    /* Inner scroll allowed, but don't swallow page pan when overscrolling. */
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .status-bar {
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    font-size: 11px;
+    text-align: center;
+  }
+
+  /* Modals: nearly full-width on phones */
+  .modal { padding: 18px; width: 94%; max-width: 460px; }
+  .modal h2 { font-size: 20px; letter-spacing: 1.5px; margin-bottom: 8px; }
+  .modal p { font-size: 12px; margin-bottom: 12px; }
+  .modal .actions { flex-wrap: wrap; }
+  .codex-modal,
+  .compendium-modal,
+  .replay-modal,
+  .mygames-modal {
+    width: 96vw;
+    max-width: 96vw;
+    max-height: 92vh;
+  }
+  .codex-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .comp-table { font-size: 11px; }
+  .comp-table th, .comp-table td { padding: 4px 6px; }
+  .comp-entries-grid { grid-template-columns: 1fr !important; }
+  .replay-stage { grid-template-columns: 1fr; }
+  .replay-side { max-height: 220px; }
+  .replay-controls { flex-wrap: wrap; justify-content: center; gap: 4px; }
+  .replay-controls button { padding: 8px 10px; }
+  .mg-row {
+    grid-template-columns: 1fr !important;
+    gap: 4px !important;
+  }
+
+  /* Tooltips: tighten so they don't overflow on tap-and-hold */
+  .power-tooltip, .piece-tooltip { max-width: 88vw; font-size: 11px; }
+
+  /* Hide animated starfield on small screens to save battery / fps */
+  body::before { display: none; }
+}
+
+/* ===== Phones (<= 480px): tighter still ===== */
+@media (max-width: 480px) {
+  .power-cards { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  header h1 { font-size: 14px; letter-spacing: 1px; }
+  /* Compact legend titles */
+  .legend .title { font-size: 10px; letter-spacing: 1.2px; }
+  /* Stack player cards vertically when there's not enough width for 2-up */
+  .side-panel.left { flex-direction: column; }
+  .side-panel.left > .player-card { flex: 1 1 100%; }
+}
+
+/* ===== Very small phones (<= 380px) ===== */
+@media (max-width: 380px) {
+  .power-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .codex-grid { grid-template-columns: 1fr !important; }
+  button { padding: 6px 8px; font-size: 10px; min-height: 32px; }
+  .square { font-size: clamp(18px, 8.6vw, 30px); }
 }
 
 /* =============== Header =============== */
@@ -361,7 +628,9 @@ button.primary {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* Do NOT use justify-content:center — on mobile it pushes the board
+     off-screen when the flex container is shorter than its content. */
+  justify-content: flex-start;
   gap: 8px;
   position: relative;
 }
@@ -372,7 +641,7 @@ button.primary {
   grid-template-columns: repeat(8, 1fr);
   grid-template-rows: repeat(8, 1fr);
   width: min(560px, 70vmin);
-  height: min(560px, 70vmin);
+  aspect-ratio: 1 / 1;
   border: 4px solid transparent;
   border-radius: 10px;
   background:
@@ -1984,6 +2253,8 @@ button.primary {
   justify-content: center;
   z-index: 200;
   animation: modalFade 0.3s ease-out;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overflow-y: auto;
 }
 @keyframes modalFade { from { opacity: 0; } to { opacity: 1; } }
 .modal {
@@ -2456,13 +2727,4 @@ button.primary {
   100% { transform: translate(-50%, -150%) scale(1.5, 0.5); opacity: 0; }
 }
 
-/* Responsive */
-@media (max-width: 1200px) {
-  #app {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto auto 1fr auto auto;
-    overflow-y: auto;
-    height: auto;
-    min-height: 100vh;
-  }
-}
+/* (Responsive rules consolidated near the top of this file.) */

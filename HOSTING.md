@@ -149,6 +149,12 @@ curl -s https://YOUR_URL/health
 
 ## Troubleshooting
 
+**"Sign-in disabled: server is missing DATABASE_URL and/or JWT_SECRET"**
+- Your server can run without accounts (anonymous play still works), but sign-in requires two environment variables:
+  1. **DATABASE_URL** — provided by Railway's Postgres plugin. If you downgraded to the free tier and removed the plugin, re-add it: Railway dashboard → your project → New → Database → Add PostgreSQL.
+  2. **JWT_SECRET** — a random secret for signing tokens. Set it manually: Railway → Variables → New Variable → `JWT_SECRET` = any long random string (e.g., `openssl rand -hex 32`).
+- After adding them, redeploy or restart the service. Check the logs for `[db] connected and migrated`.
+
 **"Cannot reach server" in the lobby**
 - The client connects to `wss://<your-host>/ws`. Your host must pass WebSocket upgrade headers through. Railway, Render, Fly, Cloudflare all handle this automatically. On a custom Nginx, confirm you have the `Upgrade` + `Connection "upgrade"` directives.
 
