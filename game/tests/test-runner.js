@@ -403,8 +403,22 @@ group('POWER: Spawn', () => {
 // POWER: DOUBLE ATTACK (renamed from Chain Lightning in v3.3)
 // ============================================================
 group('POWER: Double Attack', () => {
-  test('Piece makes two legal moves in one turn', () => {
-    // White Queen on d1 (7,3). Two empty steps: d1->d4, then d4->d7.
+  test('Piece captures then repositions (Double Attack requires first capture)', () => {
+    // White Queen on d1 (7,3). Enemy pawn at d5 (3,3). Queen captures d5, then moves to d7 (1,3).
+    const s = customGame([
+      ['a1', PIECE.KING, COLOR.WHITE],
+      ['h8', PIECE.KING, COLOR.BLACK],
+      ['d1', PIECE.QUEEN, COLOR.WHITE],
+      ['d5', PIECE.PAWN, COLOR.BLACK]
+    ]);
+    s.turn = COLOR.WHITE;
+    s.mana[COLOR.WHITE] = 20;
+    const r = castDoubleAttack(s, 7, 3, 3, 3, 1, 3); // d1 -> d5 (capture) -> d7
+    assert(r.success, r.error || '');
+    assertEq(s.board[1][3] && s.board[1][3].type, PIECE.QUEEN);
+  });
+  test('Double Attack rejects non-capture first move', () => {
+    // White Queen on d1 (7,3). No enemy on d4 — first move is non-capture → rejected.
     const s = customGame([
       ['a1', PIECE.KING, COLOR.WHITE],
       ['h8', PIECE.KING, COLOR.BLACK],
@@ -412,9 +426,9 @@ group('POWER: Double Attack', () => {
     ]);
     s.turn = COLOR.WHITE;
     s.mana[COLOR.WHITE] = 20;
-    const r = castDoubleAttack(s, 7, 3, 4, 3, 1, 3); // d1 -> d4 -> d7
-    assert(r.success, r.error || '');
-    assertEq(s.board[1][3] && s.board[1][3].type, PIECE.QUEEN);
+    const r = castDoubleAttack(s, 7, 3, 4, 3, 1, 3); // d1 -> d4 (no capture) -> d7
+    assert(r.error, 'Should reject non-capture first move');
+    assert(/capture/i.test(r.error));
   });
   test('Cannot target the King', () => {
     const s = customGame([
@@ -444,7 +458,7 @@ group('POWER: Double Attack', () => {
     // h1 has own King, so illegal — error is acceptable.
     assert(r.success || r.error);
   });
-  test('Move-then-capture: W Rook moves, then captures enemy', () => {
+  test('Capture-then-move: W Rook captures, then repositions', () => {
     const s = customGame([
       ['a1', PIECE.KING, COLOR.WHITE],
       ['h8', PIECE.KING, COLOR.BLACK],
@@ -453,13 +467,13 @@ group('POWER: Double Attack', () => {
     ]);
     s.turn = COLOR.WHITE;
     s.mana[COLOR.WHITE] = 20;
-    // Step 1: d1 → d3 (non-capture move). Step 2: d3 → d5 (captures knight).
-    const r = castDoubleAttack(s, 7, 3, 5, 3, 3, 3);
+    // Step 1: d1 → d5 (captures knight). Step 2: d5 → d3 (reposition).
+    const r = castDoubleAttack(s, 7, 3, 3, 3, 5, 3);
     assert(r.success, r.error || '');
-    // Rook should be on d5 now; knight gone.
-    const landing = s.board[3][3];
-    assert(landing && landing.type === PIECE.ROOK && landing.color === COLOR.WHITE, 'Rook lands on d5');
-    assert(!s.board[5][3], 'd3 is empty after the rook moved on');
+    // Rook should be on d3 now; knight gone.
+    const landing = s.board[5][3];
+    assert(landing && landing.type === PIECE.ROOK && landing.color === COLOR.WHITE, 'Rook lands on d3');
+    assert(!s.board[3][3], 'd5 is empty after the rook moved on');
   });
   test('Capture-then-move: W Knight captures, then repositions', () => {
     const s = customGame([
@@ -956,9 +970,9 @@ group('EDGE: Bomba v3.2 — Kings and friendlies immune', () => {
     assert(s.board[6][4] && s.board[6][4].color === COLOR.WHITE && s.board[6][4].type === PIECE.PAWN, 'Friendly pawn survives');
     // Enemy knight at f3 (row 5, col 5) destroyed
     assert(!s.board[5][5], 'Enemy knight destroyed');
-    // Shielded enemy pawn at d3 (row 5, col 3) survives but shield broken
+    // Shielded enemy pawn at d3 (row 5, col 3) survives — shield stays intact (full immunity)
     assert(s.board[5][3] && s.board[5][3].type === PIECE.PAWN, 'Shielded enemy survives');
-    assertEq(s.board[5][3].shieldHP, 0, 'Shield broken by blast');
+    assertEq(s.board[5][3].shieldHP, 1, 'Shield stays intact — full Bomba immunity');
     // Game NOT over
     assert(!s.winner, 'No Dead-Man\'s Hand anymore');
   });
@@ -1055,11 +1069,19 @@ group('v3.5: Bomba & Double Attack', () => {
     s.turn = COLOR.WHITE; s.mana[COLOR.WHITE] = POWER_COSTS[POWER.BOMBA];
     assert(castBomba(s, 5, 4).error);
   });
-  test('Bomba: pawns blocked from moving onto bomb', () => {
-    const s = customGame([['e1', PIECE.KING, COLOR.WHITE],['e8', PIECE.KING, COLOR.BLACK],['e2', PIECE.PAWN, COLOR.WHITE]]);
+  test('Bomba: pawns CAN move onto bomb to defuse', () => {
+    const s = customGame([['e1', PIECE.KING, COLOR.WHITE],['e8', PIECE.KING, COLOR.BLACK],['e2', PIECE.PAWN, COLOR.WHITE, { hasMoved: false }]]);
     s.bombs.push({ r: 5, c: 4, owner: COLOR.BLACK, turnsLeft: 2, revealed: true });
     s.timeBombs = s.bombs; s.turn = COLOR.WHITE;
-    assertEq(legalMoves(s.board, 6, 4, s).length, 0);
+    // Pawn should have 2 moves: e3 (onto bomb) and e4 (double push through e3)
+    const moves = legalMoves(s.board, 6, 4, s);
+    assert(moves.length >= 1, 'Pawn should be able to move onto bomb');
+    assert(moves.some(m => m.r === 5 && m.c === 4), 'Pawn can reach bomb square e3');
+    // Actually defuse by making the move
+    const r = makeMove(s, 6, 4, 5, 4);
+    assert(r.success, 'Pawn moves onto bomb');
+    assert(r.defused, 'Bomb defused');
+    assertEq(s.bombs.length, 0, 'Bomb removed');
   });
   test('Bomba: move onto bomb defuses', () => {
     const s = customGame([['e1', PIECE.KING, COLOR.WHITE],['e8', PIECE.KING, COLOR.BLACK],['d4', PIECE.ROOK, COLOR.WHITE]]);
@@ -1098,14 +1120,18 @@ group('v3.5: Bomba & Double Attack', () => {
     const r = castDoubleAttack(s, 7, 3, 3, 3, 3, 7);
     assert(r.success); assertEq(s.board[3][7].type, PIECE.QUEEN);
   });
-  test('Double Attack: move-then-move', () => {
+  test('Double Attack: non-capture first move rejected', () => {
+    // Rook at a3 tries to move to d3 (no capture) then d7. First move must be a capture → reject.
     const s = customGame([['a1', PIECE.KING, COLOR.WHITE],['h8', PIECE.KING, COLOR.BLACK],['a3', PIECE.ROOK, COLOR.WHITE]]);
     s.turn = COLOR.WHITE; s.mana[COLOR.WHITE] = POWER_COSTS[POWER.DOUBLE_ATTACK];
-    assert(castDoubleAttack(s, 5, 0, 5, 3, 1, 3).success);
-    assertEq(s.board[1][3].type, PIECE.ROOK);
+    const r = castDoubleAttack(s, 5, 0, 5, 3, 1, 3);
+    assert(r.error, 'Non-capture first move should be rejected');
+    assert(/capture/i.test(r.error));
   });
-  test('Double Attack: move-then-capture', () => {
-    const s = customGame([['a1', PIECE.KING, COLOR.WHITE],['h8', PIECE.KING, COLOR.BLACK],['d4', PIECE.KNIGHT, COLOR.WHITE],['f4', PIECE.PAWN, COLOR.BLACK]]);
+  test('Double Attack: capture-then-reposition (Knight)', () => {
+    // Knight at d4 captures pawn at e6, then repositions to f4.
+    // Knight d4 (4,3) → e6 (2,4) captures pawn, then e6 → f4 (4,5).
+    const s = customGame([['a1', PIECE.KING, COLOR.WHITE],['h8', PIECE.KING, COLOR.BLACK],['d4', PIECE.KNIGHT, COLOR.WHITE],['e6', PIECE.PAWN, COLOR.BLACK]]);
     s.turn = COLOR.WHITE; s.mana[COLOR.WHITE] = POWER_COSTS[POWER.DOUBLE_ATTACK];
     assert(castDoubleAttack(s, 4, 3, 2, 4, 4, 5).success);
     assertEq(s.board[4][5].type, PIECE.KNIGHT);

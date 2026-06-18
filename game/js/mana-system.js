@@ -46,7 +46,7 @@ const POWER_COSTS = {
   [POWER.AETHER_BLOCK]: 10,
   [POWER.CLEANSE]: 14,
   [POWER.BOMBA]: 14,
-  [POWER.DOUBLE_ATTACK]: 14,
+  [POWER.DOUBLE_ATTACK]: 12,
   [POWER.PROMOTE]: 15,
   [POWER.VENGEANCE]: 18,
   [POWER.WALL]: 18,
@@ -531,7 +531,12 @@ function homeFilesForType(type) {
 // has no recorded originFile (legacy data), fall back to the nearest canonical
 // start tile for the piece type.
 function homeTileFor(prisoner, fromC) {
-  const homeRank = prisoner.color === COLOR.WHITE ? 7 : 0;
+  let homeRank;
+  if (prisoner.type === PIECE.PAWN) {
+    homeRank = prisoner.color === COLOR.WHITE ? 6 : 1;
+  } else {
+    homeRank = prisoner.color === COLOR.WHITE ? 7 : 0;
+  }
   let file;
   if (prisoner.type === PIECE.PAWN) {
     file = (prisoner.originFile != null) ? prisoner.originFile : 4;
@@ -1067,6 +1072,9 @@ function castDoubleAttack(state, fromR, fromC, toR, toC, jumpR, jumpC) {
   const firstMove = firstLegal.find(m => m.r === toR && m.c === toC);
   if (!firstMove) return { error: 'First move must be legal for this piece' };
 
+  // First move of Double Attack MUST be a capture.
+  if (!firstMove.capture) return { error: 'First move of Double Attack must capture an enemy piece' };
+
   // Reject if either destination would land on a King.
   const firstTarget = state.board[toR][toC];
   if (firstTarget && firstTarget.type === PIECE.KING) return { error: 'Cannot attack the King' };
@@ -1172,6 +1180,15 @@ function castImprison(state, captorR, captorC, captiveR, captiveC) {
   if (captive.isSpectral) return { error: 'Cannot imprison Spectral' };
   if (captive.frozenUntil && captive.frozenUntil > state.turnNumber) return { error: 'Frost blocks Imprison' };
   if (captive.imprisoned) return { error: 'No nested cages' };
+
+  // Shield blocks Imprison: consume shield, spend aether, but do NOT imprison.
+  if (captive.shieldHP > 0) {
+    pushHistory(state);
+    captive.shieldHP -= 1;
+    spendAether(state, color, POWER_COSTS[POWER.IMPRISON]);
+    state.log.push(`${colorName(color)} ⛓ Imprison blocked by shield on ${pieceTypeShort(captive.type)} at ${algebraic(captiveR,captiveC)}.`);
+    return { success: true, shieldAbsorbed: true };
+  }
 
   pushHistory(state);
   // Preserve the captive's *own* origin file so Cleanse / captor-death sends the
@@ -1456,7 +1473,7 @@ function detonateBomb(state, bomb) {
   for (const a of affected) {
     if (a.piece.color === bomb.owner) continue;          // friendly: skip
     if (a.piece.type === PIECE.KING) continue;           // King: always safe
-    if (a.piece.shieldHP > 0) { a.piece.shieldHP -= 1; continue; } // shield absorbs
+    if (a.piece.shieldHP > 0) { continue; } // shielded pieces fully immune (shield stays)
     state.board[a.r][a.c] = null;
     destroyedCount++;
   }

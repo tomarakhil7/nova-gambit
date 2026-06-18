@@ -133,15 +133,12 @@ function pawnMoves(board, r, c, gameState) {
   const dir = piece.color === COLOR.WHITE ? -1 : 1;
   const startRow = piece.color === COLOR.WHITE ? 6 : 1;
   const moves = [];
-  // Helper: is (r,c) occupied by a bomb (treat bombs as obstacles for pawn moves)
-  const bombs = (gameState && gameState.bombs) || [];
-  const bombAt = (rr, cc) => bombs.some(b => b.r === rr && b.c === cc);
 
-  // Forward 1
-  if (inBounds(r + dir, c) && !board[r + dir][c] && !bombAt(r + dir, c)) {
+  // Forward 1 (pawns can move onto bombs to defuse them)
+  if (inBounds(r + dir, c) && !board[r + dir][c]) {
     moves.push({ r: r + dir, c, capture: false });
     // Forward 2 from start
-    if (r === startRow && !board[r + 2 * dir][c] && !bombAt(r + 2 * dir, c)) {
+    if (r === startRow && !board[r + 2 * dir][c]) {
       moves.push({ r: r + 2 * dir, c, capture: false, doublePush: true });
     }
   }
@@ -154,13 +151,13 @@ function pawnMoves(board, r, c, gameState) {
     if (target && target.color !== piece.color && target.type !== PIECE.KING) {
       moves.push({ r: nr, c: nc, capture: true });
     }
-    // En passant — v3.2: Spectral pawns cannot EP; bomb-occupied target square blocks EP.
+    // En passant — v3.2: Spectral pawns cannot EP.
     // Only valid for the player NOT owning the just-double-pushed pawn:
     //   white captures into row 2 (rank 6); black captures into row 5 (rank 3).
     if (gameState && gameState.enPassantTarget && !piece.isSpectral) {
       const ep = gameState.enPassantTarget;
       const epRowForUs = piece.color === COLOR.WHITE ? 2 : 5;
-      if (nr === ep.r && nc === ep.c && nr === epRowForUs && !bombAt(nr, nc)) {
+      if (nr === ep.r && nc === ep.c && nr === epRowForUs) {
         moves.push({ r: nr, c: nc, capture: true, enPassant: true });
       }
     }
@@ -198,11 +195,13 @@ function kingMoves(board, r, c, gameState) {
   ]);
 
   // Castling (only in non-phased state, no check, no through check, hasn't moved)
+  // v3.5: also reject if the Rook is frozen (Frost blocks castling).
   if (!piece.hasMoved && gameState && !isSquareAttacked(board, r, c, opposite(piece.color))) {
     // Kingside (O-O): rook at (r, 7), empty c=5,6, king goes c=6
     const kRook = board[r][7];
     if (kRook && kRook.type === PIECE.ROOK && kRook.color === piece.color && !kRook.hasMoved) {
-      if (!board[r][5] && !board[r][6]) {
+      const kRookFrozen = kRook.frozenUntil && gameState.turnNumber && kRook.frozenUntil > gameState.turnNumber;
+      if (!kRookFrozen && !board[r][5] && !board[r][6]) {
         if (!isSquareAttacked(board, r, 5, opposite(piece.color)) &&
             !isSquareAttacked(board, r, 6, opposite(piece.color))) {
           moves.push({ r, c: 6, castle: 'K' });
@@ -212,7 +211,8 @@ function kingMoves(board, r, c, gameState) {
     // Queenside (O-O-O): rook at (r, 0), empty c=1,2,3
     const qRook = board[r][0];
     if (qRook && qRook.type === PIECE.ROOK && qRook.color === piece.color && !qRook.hasMoved) {
-      if (!board[r][1] && !board[r][2] && !board[r][3]) {
+      const qRookFrozen = qRook.frozenUntil && gameState.turnNumber && qRook.frozenUntil > gameState.turnNumber;
+      if (!qRookFrozen && !board[r][1] && !board[r][2] && !board[r][3]) {
         if (!isSquareAttacked(board, r, 3, opposite(piece.color)) &&
             !isSquareAttacked(board, r, 2, opposite(piece.color))) {
           moves.push({ r, c: 2, castle: 'Q' });
