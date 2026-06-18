@@ -1176,12 +1176,15 @@ function botPlay() {
       botExecuteTurn();
     } catch (e) {
       console.error('[bot] Error during turn:', e);
-      // Ensure the loop continues even after an error
-      BOT.thinking = false;
-      if (typeof render === 'function') render();
-      return;
     }
+    // CRITICAL: Clear thinking flag BEFORE triggering next render/botCheckTurn
+    // Otherwise botCheckTurn sees BOT.thinking=true and skips, breaking the loop.
     BOT.thinking = false;
+    // Re-trigger to ensure next bot move fires (render inside botFinishTurn
+    // may have called botCheckTurn while thinking was still true)
+    if (BOT.enabled && !UI.state.winner) {
+      setTimeout(() => botCheckTurn(), 16);
+    }
   }, delay);
 }
 
