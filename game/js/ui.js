@@ -248,6 +248,11 @@ function buildPowerPanel() {
     const mode = document.getElementById('time-mode').value;
     // New local game → leave online mode if we were in it, reset perspective.
     if (NET.mode === 'online') { try { netLeave(); } catch {} }
+    // Stop bot if running
+    if (typeof botStop === 'function') botStop();
+    // Remove test panel if present
+    const testPanel = document.getElementById('bot-test-panel');
+    if (testPanel) testPanel.remove();
     UI.state = initGame();
     UI.selected = null; UI.activePower = null; UI.powerState = {};
     UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
@@ -266,6 +271,7 @@ function buildPowerPanel() {
   document.getElementById('open-codex').addEventListener('click', () => openCodex());
   document.getElementById('open-compendium').addEventListener('click', () => openCompendium());
   document.getElementById('open-lobby').addEventListener('click', () => openLobby());
+  document.getElementById('open-bot').addEventListener('click', () => openBotModal());
   document.getElementById('open-auth').addEventListener('click', () => {
     if (authIsLoggedIn()) openAccountMenu();
     else openAuthModal();
@@ -1254,22 +1260,46 @@ function render() {
   renderActiveEffects();
 
   if (UI.state.winner) showGameOverModal();
+
+  // Trigger bot if it's the bot's turn
+  if (typeof botCheckTurn === 'function') botCheckTurn();
 }
 
 function squareEl(r, c) {
   return document.querySelector(`.square[data-r="${r}"][data-c="${c}"]`);
 }
 
-// Apply Black-perspective flip + "YOU" badge based on NET state.
+// Apply Black-perspective flip + "YOU" / "BOT" badge based on NET/BOT state.
 function applyPerspective() {
   const wrap = document.querySelector('.board-wrap');
-  const flip = NET.mode === 'online' && NET.myColor === 'b';
-  if (wrap) wrap.classList.toggle('flipped', flip);
   const white = document.getElementById('player-white');
   const black = document.getElementById('player-black');
+
+  if (typeof BOT !== 'undefined' && BOT.enabled) {
+    // Bot mode: flip if human plays Black
+    const flip = BOT.color === COLOR.WHITE;
+    if (wrap) wrap.classList.toggle('flipped', flip);
+    if (white) white.classList.toggle('is-you', BOT.color !== COLOR.WHITE);
+    if (black) black.classList.toggle('is-you', BOT.color !== COLOR.BLACK);
+    // Update badges
+    const wBadge = white && white.querySelector('.you-badge');
+    const bBadge = black && black.querySelector('.you-badge');
+    if (wBadge) wBadge.textContent = BOT.color === COLOR.WHITE ? 'BOT' : 'YOU';
+    if (bBadge) bBadge.textContent = BOT.color === COLOR.BLACK ? 'BOT' : 'YOU';
+    return;
+  }
+
+  // Online / hotseat default
+  const flip = NET.mode === 'online' && NET.myColor === 'b';
+  if (wrap) wrap.classList.toggle('flipped', flip);
   const isOnline = NET.mode === 'online';
   if (white) white.classList.toggle('is-you', isOnline && NET.myColor === 'w');
   if (black) black.classList.toggle('is-you', isOnline && NET.myColor === 'b');
+  // Reset badges
+  const wBadge = white && white.querySelector('.you-badge');
+  const bBadge = black && black.querySelector('.you-badge');
+  if (wBadge) wBadge.textContent = 'YOU';
+  if (bBadge) bBadge.textContent = 'YOU';
 }
 
 function renderPlayers() {
@@ -1306,6 +1336,19 @@ function renderPowerButtons() {
     : UI.state.turn;
   const myBlocked = UI.state.aetherBlocked[myColor];
   const isMyTurnNow = (NET.mode !== 'online') || (NET.myColor === UI.state.turn);
+
+  // Sort power cards by affordability
+  const deck = document.getElementById('power-cards');
+  const cards = Array.from(deck.querySelectorAll('.power-card'));
+  cards.sort((a, b) => {
+    const pa = a.dataset.power, pb = b.dataset.power;
+    const costA = POWER_COSTS[pa], costB = POWER_COSTS[pb];
+    const affordA = canAfford(UI.state, myColor, pa) ? 0 : 1;
+    const affordB = canAfford(UI.state, myColor, pb) ? 0 : 1;
+    if (affordA !== affordB) return affordA - affordB;
+    return costA - costB;
+  });
+  cards.forEach(card => deck.appendChild(card));
 
   document.querySelectorAll('#power-cards .power-card').forEach(btn => {
     const p = btn.dataset.power;
@@ -1354,6 +1397,8 @@ function renderTurnIndicator() {
 // ---------- Interaction ----------
 function onSquareClick(r, c) {
   if (UI.state.winner) return;
+  // Block human input when it's the bot's turn
+  if (BOT.enabled && UI.state.turn === BOT.color) return;
   if (UI.activePower) { handlePowerClick(r, c); return; }
 
   const piece = UI.state.board[r][c];
@@ -1388,6 +1433,21 @@ function attemptMove(fr, fc, tr, tc) {
     UI.selected = null; UI.legalDots = [];
     render();
     return;
+  }
+  // Check if capturing a captor - show prompt about prisoner release
+  const targetPiece = UI.state.board[tr][tc];
+  if (targetPiece && targetPiece.imprisoned) {
+    const pris = targetPiece.imprisoned;
+    const homeR = pris.type === PIECE.PAWN
+      ? (pris.color === COLOR.WHITE ? 6 : 1)
+      : (pris.color === COLOR.WHITE ? 7 : 0);
+    const homeC = pris.originFile != null ? pris.originFile : 4;
+    const tile = algebraic(homeR, homeC);
+    const occupied = !!UI.state.board[homeR][homeC];
+    const msg = occupied
+      ? `Capturing this piece will release ${pris.color === COLOR.WHITE ? 'White' : 'Black'} ${pieceTypeName(pris.type)} — home tile ${tile} is occupied, prisoner will wait OFF-BOARD. Continue?`
+      : `Capturing this piece will release ${pris.color === COLOR.WHITE ? 'White' : 'Black'} ${pieceTypeName(pris.type)} to ${tile}. Continue?`;
+    if (!confirm(msg)) { UI.selected = null; UI.legalDots = []; render(); return; }
   }
   pauseClockForAnimation(800);
   const res = makeMove(UI.state, fr, fc, tr, tc);
@@ -1425,6 +1485,8 @@ function togglePower(p) {
   if (UI.activePower === p) { UI.activePower = null; UI.powerState = {}; }
   else {
     if (UI.state.winner) return;
+    // Block power casting during bot's turn
+    if (BOT.enabled && UI.state.turn === BOT.color) { setStatus("Wait — bot is thinking…", 'warn'); return; }
     // v3.3: check affordability against MY aether, not current turn's.
     const myColor = (NET.mode === 'online' && (NET.myColor === 'w' || NET.myColor === 'b'))
       ? NET.myColor : UI.state.turn;
@@ -1473,6 +1535,7 @@ function togglePower(p) {
 }
 
 function toggleSacrificeMode() {
+  if (BOT.enabled && UI.state.turn === BOT.color) { setStatus("Wait — bot is thinking…", 'warn'); return; }
   if (UI.activePower === 'SACRIFICE') UI.activePower = null;
   else { UI.activePower = 'SACRIFICE'; UI.selected = null; UI.legalDots = []; }
   render();
@@ -1851,14 +1914,33 @@ function computePowerTargets() {
       const moves = legalMoves(UI.state.board, a.r, a.c, UI.state);
       for (const m of moves) if (m.capture) targets.push({r:m.r,c:m.c});
     } else {
+      // Simulate first move to compute second-move targets
+      const a = UI.powerState.attacker;
       const f = UI.powerState.first;
-      for (let dr=-1;dr<=1;dr++) for (let dc=-1;dc<=1;dc++) {
-        if (dr===0 && dc===0) continue;
-        const nr=f.r+dr, nc=f.c+dc;
-        if (inBounds(nr,nc)) {
-          const t = UI.state.board[nr][nc];
-          if (t && t.color !== color && t.type !== PIECE.KING) targets.push({r:nr,c:nc});
-        }
+      const attacker = UI.state.board[a.r][a.c];
+      const firstTarget = UI.state.board[f.r][f.c];
+      // Determine current position after first move
+      let curR, curC;
+      const firstShieldBlock = firstTarget && firstTarget.shieldHP > 0;
+      if (firstShieldBlock) {
+        curR = a.r; curC = a.c; // attacker didn't move
+      } else {
+        curR = f.r; curC = f.c;
+      }
+      // Simulate board state for second move computation
+      const snap = snapshot(UI.state.board);
+      if (!firstShieldBlock) {
+        UI.state.board[f.r][f.c] = attacker;
+        UI.state.board[a.r][a.c] = null;
+      }
+      const secondMoves = legalMoves(UI.state.board, curR, curC, UI.state);
+      restore(UI.state.board, snap);
+      for (const m of secondMoves) {
+        if (m.r === curR && m.c === curC) continue; // skip same square
+        const t = UI.state.board[m.r][m.c]; // original board
+        // Skip king targets
+        if (t && t.type === PIECE.KING) continue;
+        targets.push({r: m.r, c: m.c});
       }
     }
   } else if (p === POWER.PROMOTE) {
@@ -2152,6 +2234,177 @@ function renderActiveEffects() {
   panel.innerHTML = effects.map(e =>
     `<div class="ae-row ${e.cls}"><span class="ae-icon">${e.icon}</span><div class="ae-body"><div class="ae-label">${e.label}</div><div class="ae-sub">${e.sub}</div></div></div>`
   ).join('');
+}
+
+// ---------- Bot Modal ----------
+function openBotModal() {
+  if (document.getElementById('bot-backdrop')) return;
+  const bd = document.createElement('div');
+  bd.id = 'bot-backdrop';
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal bot-modal">
+      <h2>🤖 Play vs Bot</h2>
+      <p style="color:var(--text-dim); margin-bottom:12px;">A heuristic AI that plays chess moves <b>and</b> Aether powers.</p>
+      <div class="lobby-row">
+        <label>Mode</label>
+        <select id="bot-mode">
+          <option value="human-vs-bot">You vs Bot</option>
+          <option value="bot-vs-bot">Bot vs Bot (watch)</option>
+        </select>
+      </div>
+      <div id="human-bot-opts">
+        <div class="lobby-row">
+          <label>You play as</label>
+          <select id="bot-color">
+            <option value="w">White (you move first)</option>
+            <option value="b">Black (bot moves first)</option>
+          </select>
+        </div>
+        <div class="lobby-row">
+          <label>Bot difficulty</label>
+          <select id="bot-difficulty">
+            <option value="easy">Easy (random moves)</option>
+            <option value="medium" selected>Medium (heuristic)</option>
+            <option value="hard">Hard (best move + powers)</option>
+          </select>
+        </div>
+      </div>
+      <div id="bot-bot-opts" style="display:none;">
+        <div class="lobby-row">
+          <label>White bot</label>
+          <select id="bot-white-diff">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        <div class="lobby-row">
+          <label>Black bot</label>
+          <select id="bot-black-diff">
+            <option value="easy">Easy</option>
+            <option value="medium" selected>Medium</option>
+            <option value="hard">Hard</option>
+          </select>
+        </div>
+        <div class="lobby-row">
+          <label>Number of games</label>
+          <select id="bot-num-games">
+            <option value="1">1 game</option>
+            <option value="3">3 games</option>
+            <option value="5" selected>5 games</option>
+            <option value="10">10 games</option>
+            <option value="20">20 games</option>
+            <option value="50">50 games</option>
+          </select>
+        </div>
+        <div class="lobby-row">
+          <label>Speed</label>
+          <select id="bot-speed">
+            <option value="instant">Instant (max speed)</option>
+            <option value="fast">Fast (testing)</option>
+            <option value="normal" selected>Normal (watch)</option>
+            <option value="slow">Slow (study)</option>
+          </select>
+        </div>
+        <div class="lobby-row">
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="bot-show-panel" checked>
+            Show live stats panel
+          </label>
+        </div>
+      </div>
+      <div class="lobby-actions" style="margin-top:16px;">
+        <button class="primary" id="bot-start">Start Game</button>
+      </div>
+      <div class="actions" style="margin-top:8px;">
+        <button id="bot-cancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(bd);
+
+  // Toggle visibility based on mode
+  bd.querySelector('#bot-mode').addEventListener('change', (e) => {
+    const isBvB = e.target.value === 'bot-vs-bot';
+    bd.querySelector('#human-bot-opts').style.display = isBvB ? 'none' : '';
+    bd.querySelector('#bot-bot-opts').style.display = isBvB ? '' : 'none';
+  });
+
+  bd.querySelector('#bot-start').addEventListener('click', () => {
+    const mode = bd.querySelector('#bot-mode').value;
+    if (mode === 'bot-vs-bot') {
+      const whiteDiff = bd.querySelector('#bot-white-diff').value;
+      const blackDiff = bd.querySelector('#bot-black-diff').value;
+      const numGames = parseInt(bd.querySelector('#bot-num-games').value);
+      const speed = bd.querySelector('#bot-speed').value;
+      const showPanel = bd.querySelector('#bot-show-panel').checked;
+      document.body.removeChild(bd);
+      startBotVsBotGame(whiteDiff, blackDiff, numGames, speed, showPanel);
+    } else {
+      const playerColor = bd.querySelector('#bot-color').value;
+      const difficulty = bd.querySelector('#bot-difficulty').value;
+      const botColor = playerColor === 'w' ? COLOR.BLACK : COLOR.WHITE;
+      document.body.removeChild(bd);
+      startBotGame(botColor, difficulty);
+    }
+  });
+  bd.querySelector('#bot-cancel').addEventListener('click', () => {
+    document.body.removeChild(bd);
+  });
+}
+
+function startBotGame(botColor, difficulty) {
+  // Leave online mode if active
+  if (NET.mode === 'online') { try { netLeave(); } catch {} }
+  // Start fresh game
+  UI.state = initGame();
+  UI.selected = null; UI.activePower = null; UI.powerState = {};
+  UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
+  buildBoard();
+  const mode = document.getElementById('time-mode').value;
+  initClock(mode);
+  startClock();
+  // Flip board if player is Black
+  const wrap = document.querySelector('.board-wrap');
+  if (wrap) wrap.classList.toggle('flipped', botColor === COLOR.WHITE);
+  // Start the bot
+  botStart(botColor, difficulty);
+  const diffLabel = difficulty.charAt(0).toUpperCase() + difficulty.slice(1);
+  setStatus(`vs Bot (${diffLabel}) — ${botColor === COLOR.BLACK ? 'you are White' : 'you are Black'}. Good luck!`, 'ok');
+  applyPerspective();
+  render();
+}
+
+function startBotVsBotGame(whiteDiff, blackDiff, numGames, speed, showPanel) {
+  // Leave online mode if active
+  if (NET.mode === 'online') { try { netLeave(); } catch {} }
+  // Remove any old test panel
+  const oldPanel = document.getElementById('bot-test-panel');
+  if (oldPanel) oldPanel.remove();
+  // Start fresh game
+  UI.state = initGame();
+  UI.selected = null; UI.activePower = null; UI.powerState = {};
+  UI.prevAether = { w: UI.state.mana[COLOR.WHITE], b: UI.state.mana[COLOR.BLACK] };
+  buildBoard();
+  initClock('untimed');
+  // Don't flip board — spectator view (White at bottom)
+  const wrap = document.querySelector('.board-wrap');
+  if (wrap) wrap.classList.toggle('flipped', false);
+  // Update player badges
+  const white = document.getElementById('player-white');
+  const black = document.getElementById('player-black');
+  if (white) { white.classList.remove('is-you'); const yb = white.querySelector('.you-badge'); if (yb) yb.textContent = 'BOT'; }
+  if (black) { black.classList.remove('is-you'); const yb = black.querySelector('.you-badge'); if (yb) yb.textContent = 'BOT'; }
+  // Launch bot-vs-bot
+  botVsBotStart({
+    white: whiteDiff,
+    black: blackDiff,
+    games: numGames,
+    speed: speed
+  });
+  // Show live test panel
+  if (showPanel !== false) botShowTestPanel();
+  render();
 }
 
 // ---------- Keyboard ----------

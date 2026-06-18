@@ -2727,4 +2727,90 @@ button.primary {
   100% { transform: translate(-50%, -150%) scale(1.5, 0.5); opacity: 0; }
 }
 
+/* ============================================ */
+/* Bot Test Panel — live stats overlay          */
+/* ============================================ */
+.bot-test-panel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 260px;
+  background: rgba(12, 16, 24, 0.96);
+  border: 1px solid rgba(77, 228, 255, 0.3);
+  border-radius: 12px;
+  padding: 14px 16px;
+  z-index: 9000;
+  font-family: 'JetBrains Mono', 'Inter', monospace;
+  font-size: 12px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6), 0 0 12px rgba(77, 228, 255, 0.1);
+  color: #e4e8f0;
+  backdrop-filter: blur(12px);
+}
+.btp-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.btp-icon { font-size: 16px; }
+.btp-title {
+  flex: 1;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  color: #4de4ff;
+  text-transform: uppercase;
+}
+.btp-stop {
+  background: rgba(255, 60, 80, 0.15);
+  border: 1px solid rgba(255, 60, 80, 0.4);
+  color: #ff6b7a;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.2s;
+}
+.btp-stop:hover { background: rgba(255, 60, 80, 0.3); }
+.btp-stats { margin-bottom: 10px; }
+.btp-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+}
+.btp-label { color: #8a92a8; }
+.btp-white { color: #fff; font-weight: 600; }
+.btp-black { color: #a0a8b8; font-weight: 600; }
+.btp-ok { color: #4cff8d; font-weight: 700; }
+.btp-fail { color: #ff4d6a; font-weight: 700; animation: btp-pulse 0.6s ease infinite; }
+@keyframes btp-pulse { 50% { opacity: 0.5; } }
+.btp-log-header {
+  font-size: 10px;
+  color: #6a7088;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin: 8px 0 4px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  padding-top: 8px;
+}
+.btp-log {
+  max-height: 140px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.btp-log-entry {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+.btp-game-num { color: #6a7088; min-width: 24px; }
+.btp-result-w { color: #fff; font-weight: 700; }
+.btp-result-b { color: #a0a8b8; font-weight: 700; }
+.btp-result-d { color: #ffb347; font-weight: 700; }
+.btp-reason { color: #7a8098; }
+
 /* (Responsive rules consolidated near the top of this file.) */
