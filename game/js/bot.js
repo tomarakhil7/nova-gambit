@@ -515,14 +515,40 @@ const BOT_SEARCH_DEPTH = 3; // 3-ply = my move + response + my follow-up
 const BOT_ROOT_CANDIDATES = 12; // Deep-search top N root moves (wider to avoid missing good moves)
 
 // Quick move-ordering score (no board copies — pure heuristics)
+// Used in inner tree nodes: MUST be fast (no isSquareAttacked calls)
 function botOrderScore(state, m, forColor) {
   let s = 0;
-  const opp = opposite(forColor);
   const piece = state.board[m.from.r][m.from.c];
   const target = state.board[m.to.r][m.to.c];
   // MVV-LVA for captures
   if (target && target.color !== piece.color) {
     s += 10000 + BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
+  }
+  // Promotions
+  if (piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) s += 9000;
+  // PST improvement
+  const phase = botGamePhase(state);
+  s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
+  // King aggression in endgame
+  if (phase < 0.5 && piece.type !== PIECE.KING) {
+    const oppKing = findKing(state.board, opposite(forColor));
+    if (oppKing) {
+      const dist = Math.abs(m.to.r - oppKing.r) + Math.abs(m.to.c - oppKing.c);
+      if (dist <= 2) s += 300;
+    }
+  }
+  return s;
+}
+
+// Root-level move ordering: includes safety checks (isSquareAttacked).
+// Only called once at the root, so cost is acceptable.
+function botRootOrderScore(state, m, forColor) {
+  let s = botOrderScore(state, m, forColor);
+  const opp = opposite(forColor);
+  const piece = state.board[m.from.r][m.from.c];
+  const target = state.board[m.to.r][m.to.c];
+
+  if (target && target.color !== piece.color) {
     // Penalize capturing into a defended square with a more valuable piece
     if (BOT_PIECE_VALUES[piece.type] > BOT_PIECE_VALUES[target.type]) {
       if (isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
@@ -532,25 +558,11 @@ function botOrderScore(state, m, forColor) {
   } else {
     // Non-capture: penalize moving to an attacked square (hanging piece)
     if (piece.type !== PIECE.PAWN && isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
-      // Check if the square is also defended by us
       if (!isSquareAttacked(state.board, m.to.r, m.to.c, forColor)) {
         s -= BOT_PIECE_VALUES[piece.type] * 3; // heavy penalty: piece will be lost
       } else if (BOT_PIECE_VALUES[piece.type] > 320) {
-        s -= 200; // slight penalty: trading on an attacked square with valuable piece
+        s -= 200; // slight penalty for trading
       }
-    }
-  }
-  // Promotions
-  if (piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) s += 9000;
-  // PST improvement
-  const phase = botGamePhase(state);
-  s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
-  // King aggression in endgame
-  if (phase < 0.5 && piece.type !== PIECE.KING) {
-    const oppKing = findKing(state.board, opp);
-    if (oppKing) {
-      const dist = Math.abs(m.to.r - oppKing.r) + Math.abs(m.to.c - oppKing.c);
-      if (dist <= 2) s += 300;
     }
   }
   return s;
@@ -639,8 +651,8 @@ function botQuiesce(state, alpha, beta, forColor) {
 function botSearchBestMove(state, moves, forColor) {
   const opp = opposite(forColor);
 
-  // Quick-score all moves for ordering
-  const scored = moves.map(m => ({ m, s: botOrderScore(state, m, forColor) }));
+  // Quick-score all moves for ordering (root uses safety-aware scoring)
+  const scored = moves.map(m => ({ m, s: botRootOrderScore(state, m, forColor) }));
   scored.sort((a, b) => b.s - a.s);
 
   // Only deep-search the top candidates
