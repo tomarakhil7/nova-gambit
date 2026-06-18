@@ -727,8 +727,11 @@ function botConsiderPowers(state, forColor) {
   }
 
   // PROMOTE: If we have a pawn, promote it — very high priority
-  // But ONLY if the promoted queen won't be immediately captured undefended!
-  if (aether >= POWER_COSTS[POWER.PROMOTE]) {
+  // But DON'T promote if:
+  //   1. The queen will be immediately captured (attacked & undefended)
+  //   2. Opponent has enough aether for Vengeance (they'll just destroy it)
+  const oppCanVengeance = state.mana[opp] >= POWER_COSTS[POWER.VENGEANCE] && !state.aetherBlocked[opp];
+  if (aether >= POWER_COSTS[POWER.PROMOTE] && !oppCanVengeance) {
     let bestPawn = null, bestDist = 99, bestSafe = false;
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
@@ -1084,7 +1087,9 @@ function botConsiderSacrifice(state, forColor) {
 }
 
 // ---------- Emergency Escape (when in check with no legal moves) ----------
-// Tries powers that can resolve a check situation: Blink to block, Vengeance to destroy attacker
+// Mirrors canOpponentEscapeMateWithPowers logic: tries ALL possible power escapes.
+// Must find every escape the game engine considers valid, or the bot gets stuck.
+// Uses a probe approach: test on a copy, execute on real state only when confirmed.
 function botEmergencyEscape(state, forColor) {
   if (state.aetherBlocked[forColor]) return null;
   const aether = state.mana[forColor];
@@ -1103,73 +1108,78 @@ function botEmergencyEscape(state, forColor) {
     }
   }
 
-  // Try VENGEANCE: destroy the attacker
+  // Helper: test a power on a clone to see if it resolves check
+  function probeEscape(castFn) {
+    const boardSnap = snapshot(state.board);
+    const manaBefore = state.mana[forColor];
+    const res = castFn(state);
+    if (res && res.success && !isInCheck(state.board, forColor)) {
+      return true; // Success! State is already modified correctly
+    }
+    // Failed or didn't resolve check — restore
+    restore(state.board, boardSnap);
+    state.mana[forColor] = manaBefore;
+    return false;
+  }
+
+  // 1. Try VENGEANCE: destroy the attacker
   if (aether >= POWER_COSTS[POWER.VENGEANCE] && attackers.length > 0) {
-    // Destroy the most valuable attacker
-    let best = attackers[0];
-    for (const a of attackers) {
-      if (BOT_PIECE_VALUES[a.piece.type] > BOT_PIECE_VALUES[best.piece.type]) best = a;
-    }
-    if (best.piece.type !== PIECE.KING) {
-      const res = castVengeance(state, best.r, best.c);
-      if (res && res.success) {
-        return { name: 'VENGEANCE', payload: { power: 'VENGEANCE', r: best.r, c: best.c } };
+    for (const atk of attackers) {
+      if (atk.piece.type === PIECE.KING) continue;
+      if (probeEscape(s => castVengeance(s, atk.r, atk.c))) {
+        return { name: 'VENGEANCE', payload: { power: 'VENGEANCE', r: atk.r, c: atk.c } };
       }
     }
   }
 
-  // Try BLINK: move a piece to block the check line
-  if (aether >= POWER_COSTS[POWER.BLINK] && attackers.length === 1) {
-    const attacker = attackers[0];
-    // Find squares between attacker and king (for sliding pieces)
-    const betweenSquares = [];
-    const dr = Math.sign(kingPos.r - attacker.r);
-    const dc = Math.sign(kingPos.c - attacker.c);
-    if (dr !== 0 || dc !== 0) {
-      let r = attacker.r + dr, c = attacker.c + dc;
-      while (r !== kingPos.r || c !== kingPos.c) {
-        if (inBounds(r, c)) betweenSquares.push({ r, c });
-        r += dr; c += dc;
-      }
-    }
-
-    // Try to blink any own non-king piece to a blocking square
-    for (const blockSq of betweenSquares) {
-      if (state.board[blockSq.r][blockSq.c]) continue; // must be empty
-      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
-        const p = state.board[r][c];
-        if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
-        if (p.imprisoned || (p.frozenUntil && p.frozenUntil > state.turnNumber)) continue;
-        // Check if blockSq is in blink range of this piece
-        const top = Math.max(0, Math.min(r - 1, 5));
-        const left = Math.max(0, Math.min(c - 1, 5));
-        if (blockSq.r >= top && blockSq.r < top + 3 && blockSq.c >= left && blockSq.c < left + 3) {
-          const res = castBlink(state, r, c, blockSq.r, blockSq.c);
-          if (res && res.success) {
-            return { name: 'BLINK', payload: { power: 'BLINK', from: { r, c }, to: blockSq } };
-          }
+  // 2. Try IMPRISON: cage the attacker with an adjacent friendly piece
+  if (aether >= POWER_COSTS[POWER.IMPRISON]) {
+    for (const atk of attackers) {
+      if (atk.piece.type === PIECE.KING) continue;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const cr = atk.r + dr, cc = atk.c + dc;
+        if (!inBounds(cr, cc)) continue;
+        const captor = state.board[cr][cc];
+        if (!captor || captor.color !== forColor || captor.type === PIECE.KING) continue;
+        if (captor.isSpectral || captor.imprisoned) continue;
+        if (probeEscape(s => castImprison(s, cr, cc, atk.r, atk.c))) {
+          return { name: 'IMPRISON', payload: { power: 'IMPRISON', captor: { r: cr, c: cc }, captive: { r: atk.r, c: atk.c } } };
         }
       }
     }
   }
 
-  // Try WALL: might help if there's a piece adjacent to king
+  // 3. Try BLINK: move any own piece to any adjacent square (brute force, mirrors engine)
+  if (aether >= POWER_COSTS[POWER.BLINK]) {
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color !== forColor || p.type === PIECE.KING) continue;
+      if (p.isSpectral || p.imprisoned) continue;
+      if (p.frozenUntil && p.frozenUntil > state.turnNumber) continue;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = r + dr, nc = c + dc;
+        if (!inBounds(nr, nc)) continue;
+        if (probeEscape(s => castBlink(s, r, c, nr, nc))) {
+          return { name: 'BLINK', payload: { power: 'BLINK', from: { r, c }, to: { r: nr, c: nc } } };
+        }
+      }
+    }
+  }
+
+  // 4. Try WALL: spawn pawns around any own piece to block check line
   if (aether >= POWER_COSTS[POWER.WALL]) {
-    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-      if (dr === 0 && dc === 0) continue;
-      const nr = kingPos.r + dr, nc = kingPos.c + dc;
-      if (!inBounds(nr, nc)) continue;
-      const p = state.board[nr][nc];
-      if (p && p.color === forColor && p.type !== PIECE.KING) {
-        const res = castWall(state, nr, nc);
-        if (res && res.success) {
-          return { name: 'WALL', payload: { power: 'WALL', r: nr, c: nc } };
-        }
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
+      if (probeEscape(s => castWall(s, r, c))) {
+        return { name: 'WALL', payload: { power: 'WALL', r, c } };
       }
     }
   }
 
-  return null; // No escape found — checkmate
+  return null; // True checkmate — no power can save
 }
 
 // ---------- Main Bot Turn ----------
@@ -1263,6 +1273,19 @@ function botExecuteTurn() {
         if (typeof recordAction === 'function') recordAction('POWER_CAST', color, escaped.payload || { power: escaped.name });
         setStatus(`Bot used ${escaped.name} to escape check!`, 'ok');
         render();
+      } else {
+        // No escape found — this is checkmate. Force game end to prevent stuck state.
+        console.log('[bot] No escape possible — declaring checkmate');
+        UI.state.winner = opposite(color);
+        UI.state.winReason = 'CHECKMATE';
+        UI.state.log.push(`Checkmate! ${opposite(color) === COLOR.WHITE ? 'White' : 'Black'} wins.`);
+      }
+    } else {
+      // Not in check but no moves = stalemate
+      if (!UI.state.winner) {
+        UI.state.winner = 'DRAW';
+        UI.state.winReason = 'STALEMATE';
+        UI.state.log.push('Stalemate - draw.');
       }
     }
     botFinishTurn();
