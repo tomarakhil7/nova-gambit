@@ -1119,7 +1119,11 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // BLINK: Blink a piece to escape or to attack (more aggressive in endgame)
+  // BLINK: Blink a piece to escape or to attack (more aggressive in endgame).
+  // CRITICAL: never blink to a square where the piece is en-prise (attacked by
+  // opponent and not defended by a same-or-lower-value friendly). The endgame
+  // king-chase heuristic was happily blinking a Rook onto squares the enemy
+  // King could capture for free.
   if (aether >= POWER_COSTS[POWER.BLINK]) {
     let bestBlink = null, bestBlinkScore = 0;
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
@@ -1134,12 +1138,31 @@ function botConsiderPowers(state, forColor) {
       for (let nr = top; nr < top + 3; nr++) for (let nc = left; nc < left + 3; nc++) {
         if (nr === r && nc === c) continue;
         if (state.board[nr][nc]) continue;
+
+        // SAFETY CHECK: simulate the blink and ask whether the landing square is
+        // en-prise. If the piece is attacked there and not defended by an equal
+        // or cheaper friendly, treat the blink as a free hand-out and skip it.
+        const snap = snapshot(state.board);
+        state.board[nr][nc] = p;
+        state.board[r][c] = null;
+        const attackedAfter = isSquareAttacked(state.board, nr, nc, opp);
+        const defendedAfter = isSquareAttacked(state.board, nr, nc, forColor);
+        restore(state.board, snap);
+        const myValue = BOT_PIECE_VALUES[p.type] || 0;
+        // Hanging if attacked and undefended, OR attacked-and-defended where
+        // exchange loses material (we give a Rook to take a Pawn — the
+        // attacker is implicitly at least the cheapest enemy nearby; without
+        // a full SEE just refuse if we drop a R/Q onto an attacked square).
+        if (attackedAfter && (myValue >= 4 || !defendedAfter)) continue;
+
         let blinkScore = 0;
         if (isAttacked) {
-          blinkScore = BOT_PIECE_VALUES[p.type] * 0.3; // escape value
+          blinkScore = myValue * 0.3; // escape value
         }
-        // In endgame: bonus for blinking closer to enemy king
-        if (phase < 0.5) {
+        // In endgame: bonus for blinking closer to enemy king, but ONLY if the
+        // destination is genuinely safe (attackedAfter==false). Otherwise we
+        // were rewarding the bot for sacrificing a Rook to "approach" the King.
+        if (phase < 0.5 && !attackedAfter) {
           const oppKing = findKing(state.board, opp);
           if (oppKing) {
             const distBefore = botManhattan(r, c, oppKing.r, oppKing.c);
