@@ -39,7 +39,7 @@ vm.runInContext(
 const {
   PIECE, COLOR, makePiece, createInitialBoard, algebraic, fromAlgebraic,
   findKing, legalMoves, allLegalMoves, isInCheck, isCheckmate, isStalemate,
-  isSquareAttacked, opposite, snapshot, restore, inBounds
+  isSquareAttacked, opposite, snapshot, restore, inBounds, applyMoveRaw
 } = ctx;
 
 const {
@@ -51,7 +51,7 @@ const {
   validBombaTarget
 } = ctx;
 
-// ---------- Minimal Bot Logic (extracted for headless) ----------
+// ---------- Improved Bot Logic (headless, matches browser bot.js) ----------
 const BOT_PIECE_VALUES = { P: 100, N: 320, B: 330, R: 500, Q: 900, K: 20000 };
 
 const BOT_PST_PAWN = [
@@ -59,53 +59,232 @@ const BOT_PST_PAWN = [
   5,5,10,25,25,10,5,5, 0,0,0,20,20,0,0,0, 5,-5,-10,0,0,-10,-5,5,
   5,10,10,-20,-20,10,10,5, 0,0,0,0,0,0,0,0
 ];
+const BOT_PST_PAWN_EG = [
+  0,0,0,0,0,0,0,0, 130,130,130,130,130,130,130,130, 80,80,80,80,80,80,80,80,
+  50,50,50,50,50,50,50,50, 30,30,30,30,30,30,30,30, 10,10,10,10,10,10,10,10,
+  0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0
+];
 const BOT_PST_KNIGHT = [
   -50,-40,-30,-30,-30,-30,-40,-50, -40,-20,0,0,0,0,-20,-40,
   -30,0,10,15,15,10,0,-30, -30,5,15,20,20,15,5,-30,
   -30,0,15,20,20,15,0,-30, -30,5,10,15,15,10,5,-30,
   -40,-20,0,5,5,0,-20,-40, -50,-40,-30,-30,-30,-30,-40,-50
 ];
+const BOT_PST_KING = [
+  -30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30,
+  -30,-40,-40,-50,-50,-40,-40,-30, -30,-40,-40,-50,-50,-40,-40,-30,
+  -20,-30,-30,-40,-40,-30,-30,-20, -10,-20,-20,-20,-20,-20,-20,-10,
+  20,20,0,0,0,0,20,20, 20,30,10,0,0,10,30,20
+];
+const BOT_PST_KING_EG = [
+  -50,-30,-20,-20,-20,-20,-30,-50, -30,0,10,10,10,10,0,-30,
+  -20,10,20,30,30,20,10,-20, -20,10,30,40,40,30,10,-20,
+  -20,10,30,40,40,30,10,-20, -20,10,20,30,30,20,10,-20,
+  -30,0,10,10,10,10,0,-30, -50,-30,-20,-20,-20,-20,-30,-50
+];
 
-function botPieceSquareValue(piece, r, c) {
+function botGamePhase(state) {
+  let material = 0;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (!p || p.isSpectral || p.type === PIECE.PAWN || p.type === PIECE.KING) continue;
+    const weights = { N: 1, B: 1, R: 2, Q: 4 };
+    material += weights[p.type] || 0;
+  }
+  return Math.min(1.0, material / 20);
+}
+
+function botKingCornerDist(r, c) {
+  return Math.max(3 - c, c - 4) + Math.max(3 - r, r - 4);
+}
+function botManhattan(r1, c1, r2, c2) { return Math.abs(r1 - r2) + Math.abs(c1 - c2); }
+
+function botCountMaterial(state, color) {
+  let total = 0;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (p && p.color === color && !p.isSpectral) total += BOT_PIECE_VALUES[p.type];
+  }
+  return total;
+}
+
+function botPieceSquareValue(piece, r, c, phase) {
   let table = null;
-  if (piece.type === PIECE.PAWN) table = BOT_PST_PAWN;
+  if (piece.type === PIECE.PAWN) table = phase < 0.4 ? BOT_PST_PAWN_EG : BOT_PST_PAWN;
   else if (piece.type === PIECE.KNIGHT) table = BOT_PST_KNIGHT;
+  else if (piece.type === PIECE.KING) table = phase < 0.4 ? BOT_PST_KING_EG : BOT_PST_KING;
   if (!table) return 0;
   const idx = piece.color === COLOR.WHITE ? (r * 8 + c) : ((7 - r) * 8 + c);
   return table[idx];
+}
+
+function botEvaluate(state, forColor) {
+  let score = 0;
+  const opp = opposite(forColor);
+  const phase = botGamePhase(state);
+  let myMaterial = 0, oppMaterial = 0;
+  let myKingPos = null, oppKingPos = null;
+
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (!p || p.isSpectral) continue;
+    if (p.type === PIECE.KING) {
+      if (p.color === forColor) myKingPos = { r, c }; else oppKingPos = { r, c };
+    }
+    const baseVal = BOT_PIECE_VALUES[p.type];
+    const pstVal = botPieceSquareValue(p, r, c, phase);
+    if (p.color === forColor) { score += baseVal + pstVal; myMaterial += baseVal; }
+    else { score -= baseVal + pstVal; oppMaterial += baseVal; }
+    if (p.frozenUntil && p.frozenUntil > state.turnNumber) {
+      const pen = baseVal * 0.15;
+      if (p.color === forColor) score -= pen; else score += pen;
+    }
+    // Passed pawn bonus in endgame
+    if (p.type === PIECE.PAWN && phase < 0.6) {
+      const dir = p.color === COLOR.WHITE ? -1 : 1;
+      let passed = true;
+      for (let scanR = r + dir; scanR >= 0 && scanR <= 7; scanR += dir) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const sc = c + dc;
+          if (sc < 0 || sc > 7) continue;
+          const bl = state.board[scanR][sc];
+          if (bl && bl.type === PIECE.PAWN && bl.color !== p.color && !bl.isSpectral) { passed = false; break; }
+        }
+        if (!passed) break;
+      }
+      if (passed) {
+        const dist = p.color === COLOR.WHITE ? r : (7 - r);
+        const bonus = (7 - dist) * 25;
+        if (p.color === forColor) score += bonus; else score -= bonus;
+      }
+    }
+  }
+
+  // Check bonus
+  if (isInCheck(state.board, opp)) score += phase < 0.4 ? 80 : 40;
+  if (isInCheck(state.board, forColor)) score -= phase < 0.4 ? 80 : 40;
+
+  // Mating drive
+  const matAdv = myMaterial - oppMaterial;
+  if (phase < 0.5 && matAdv > 200 && oppKingPos && myKingPos) {
+    score += botKingCornerDist(oppKingPos.r, oppKingPos.c) * 15;
+    score += (14 - botManhattan(myKingPos.r, myKingPos.c, oppKingPos.r, oppKingPos.c)) * 8;
+    if (matAdv > 500) {
+      score += botKingCornerDist(oppKingPos.r, oppKingPos.c) * 10;
+      score += (14 - botManhattan(myKingPos.r, myKingPos.c, oppKingPos.r, oppKingPos.c)) * 5;
+    }
+  }
+
+  // Trade-down bonus when ahead
+  if (matAdv > 200 && phase < 0.7) {
+    const total = myMaterial + oppMaterial - 40000;
+    score += Math.max(0, (6000 - total) / 75);
+  }
+
+  return score;
 }
 
 function botScoreMove(state, from, to, forColor) {
   let score = 0;
   const piece = state.board[from.r][from.c];
   const target = state.board[to.r][to.c];
+  const phase = botGamePhase(state);
+  const opp = opposite(forColor);
+
   if (target && target.color !== piece.color) {
-    score += BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
-    if (target.shieldHP > 0) score -= 200;
+    if (target.shieldHP > 0) { score -= 200; }
+    else {
+      score += BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
+      const myMat = botCountMaterial(state, forColor);
+      const oppMat = botCountMaterial(state, opp);
+      if (myMat - oppMat > 200) score += BOT_PIECE_VALUES[target.type] * 2;
+    }
   }
-  score += botPieceSquareValue(piece, to.r, to.c) - botPieceSquareValue(piece, from.r, from.c);
-  if (piece.type === PIECE.PAWN && (to.r === 0 || to.r === 7)) score += 800;
+  score += botPieceSquareValue(piece, to.r, to.c, phase) - botPieceSquareValue(piece, from.r, from.c, phase);
+  if (piece.type === PIECE.PAWN && (to.r === 0 || to.r === 7)) score += 900;
+  if (piece.type === PIECE.PAWN && phase < 0.5) {
+    const adv = piece.color === COLOR.WHITE ? (from.r - to.r) : (to.r - from.r);
+    score += adv * 30;
+  }
   if (state.fountains && state.fountains.some(f => f.r === to.r && f.c === to.c)) score += 60;
-  if (CENTER_SQUARES && CENTER_SQUARES.some(sq => sq.r === to.r && sq.c === to.c)) score += 25;
+  if (CENTER_SQUARES && CENTER_SQUARES.some(sq => sq.r === to.r && sq.c === to.c)) score += 25 * phase;
   if (state.bombs && state.bombs.some(b => b.r === to.r && b.c === to.c && b.owner !== forColor)) score += 150;
+
+  // King march in endgame
+  if (piece.type === PIECE.KING && phase < 0.4) {
+    const myMat = botCountMaterial(state, forColor);
+    const oppMat = botCountMaterial(state, opp);
+    if (myMat - oppMat > 200) {
+      const oppKing = findKing(state.board, opp);
+      if (oppKing) {
+        score += (botManhattan(from.r, from.c, oppKing.r, oppKing.c) - botManhattan(to.r, to.c, oppKing.r, oppKing.c)) * 20;
+      }
+    }
+  }
+
+  // Check bonus
+  if (phase < 0.6 || (target && target.color !== piece.color)) {
+    const snap = snapshot(state.board);
+    const apply = applyMoveRaw;
+    apply(state.board, from.r, from.c, { r: to.r, c: to.c, capture: !!(target && target.color !== piece.color), castle: to.castle, enPassant: to.enPassant }, state);
+    if (isInCheck(state.board, opp)) score += phase < 0.4 ? 60 : 35;
+    restore(state.board, snap);
+  }
+
   return score;
+}
+
+function botSearchBestMove(state, moves, color) {
+  const opp = opposite(color);
+  let bestMove = null, bestScore = -Infinity;
+  const apply = applyMoveRaw;
+
+  // Check for immediate checkmate
+  for (const m of moves) {
+    const snap = snapshot(state.board);
+    const piece = state.board[m.from.r][m.from.c];
+    apply(state.board, m.from.r, m.from.c, { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant }, state);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, color);
+    const mate = isCheckmate(state.board, opp, state);
+    restore(state.board, snap);
+    if (mate) return m;
+  }
+
+  // Evaluate each move — compute move score BEFORE applying (piece is still on from)
+  for (const m of moves) {
+    const moveScore = botScoreMove(state, m.from, m.to, color);
+    const snap = snapshot(state.board);
+    const piece = state.board[m.from.r][m.from.c];
+    apply(state.board, m.from.r, m.from.c, { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant }, state);
+    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, color);
+    // Penalize stalemate when winning
+    if (isStalemate(state.board, opp, state)) {
+      const myMat = botCountMaterial(state, color);
+      const oppMat = botCountMaterial(state, opp);
+      restore(state.board, snap);
+      if (myMat > oppMat + 100) { if (-5000 > bestScore) { bestScore = -5000; bestMove = m; } continue; }
+    }
+    let ev = botEvaluate(state, color) + moveScore * 0.1;
+    restore(state.board, snap);
+    if (ev > bestScore) { bestScore = ev; bestMove = m; }
+  }
+  return bestMove || moves[0];
 }
 
 function botPickMove(state, color, difficulty) {
   const moves = allLegalMoves(state.board, color, state);
   if (moves.length === 0) return null;
   if (difficulty === 'easy') return moves[Math.floor(Math.random() * moves.length)];
+  if (difficulty === 'hard') return botSearchBestMove(state, moves, color);
+  // Medium
   const scored = moves.map(m => ({ move: m, score: botScoreMove(state, m.from, m.to, color) }));
   scored.sort((a, b) => b.score - a.score);
-  if (difficulty === 'medium') {
-    const top = scored.slice(0, Math.min(3, scored.length));
-    const weights = top.map((s, i) => Math.max(1, 10 - i * 3));
-    const totalWeight = weights.reduce((a, b) => a + b, 0);
-    let r = Math.random() * totalWeight;
-    for (let i = 0; i < top.length; i++) { r -= weights[i]; if (r <= 0) return top[i].move; }
-    return top[0].move;
-  }
-  return scored[0].move;
+  const top = scored.slice(0, Math.min(3, scored.length));
+  const weights = top.map((s, i) => Math.max(1, 10 - i * 3));
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+  let r = Math.random() * totalWeight;
+  for (let i = 0; i < top.length; i++) { r -= weights[i]; if (r <= 0) return top[i].move; }
+  return top[0].move;
 }
 
 function botTryPower(state, color, difficulty) {
@@ -113,7 +292,39 @@ function botTryPower(state, color, difficulty) {
   if (state.aetherBlocked[color]) return null;
   const aether = state.mana[color];
   const opp = opposite(color);
+  const phase = botGamePhase(state);
   const candidates = [];
+
+  // VENGEANCE — top priority in endgame
+  if (aether >= POWER_COSTS[POWER.VENGEANCE]) {
+    let bestTarget = null, bestVal = 0;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color === color || p.type === PIECE.KING || p.isSpectral) continue;
+      if (BOT_PIECE_VALUES[p.type] > bestVal) { bestVal = BOT_PIECE_VALUES[p.type]; bestTarget = { r, c }; }
+    }
+    const threshold = phase < 0.5 ? 100 : 500;
+    if (bestTarget && bestVal >= threshold) {
+      const prio = phase < 0.5 ? bestVal * 0.25 : bestVal * 0.12;
+      candidates.push({ priority: prio, exec: () => castVengeance(state, bestTarget.r, bestTarget.c), name: 'VENGEANCE' });
+    }
+  }
+
+  // PROMOTE
+  if (aether >= POWER_COSTS[POWER.PROMOTE]) {
+    let bestPawn = null, bestDist = 99;
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (p && p.color === color && p.type === PIECE.PAWN && !p.isSpectral) {
+        const d = color === COLOR.WHITE ? r : (7 - r);
+        if (d < bestDist) { bestDist = d; bestPawn = { r, c }; }
+      }
+    }
+    if (bestPawn) {
+      const prio = phase < 0.5 ? (80 + (7 - bestDist) * 15) * 1.5 : 80 + (7 - bestDist) * 15;
+      candidates.push({ priority: prio, exec: () => castPromote(state, bestPawn.r, bestPawn.c, PIECE.QUEEN), name: 'PROMOTE' });
+    }
+  }
 
   // FROST
   if (aether >= POWER_COSTS[POWER.FROST] && !isInCheck(state.board, color)) {
@@ -125,7 +336,8 @@ function botTryPower(state, color, difficulty) {
       const val = BOT_PIECE_VALUES[p.type];
       if (val > bestVal) { bestVal = val; bestTarget = { r, c }; }
     }
-    if (bestTarget && bestVal >= 320) candidates.push({ priority: bestVal * 0.1, exec: () => castFrost(state, bestTarget.r, bestTarget.c), name: 'FROST' });
+    const threshold = phase < 0.5 ? 100 : 320;
+    if (bestTarget && bestVal >= threshold) candidates.push({ priority: bestVal * 0.1, exec: () => castFrost(state, bestTarget.r, bestTarget.c), name: 'FROST' });
   }
 
   // FORTIFY
@@ -144,26 +356,16 @@ function botTryPower(state, color, difficulty) {
 
   // AETHER BLOCK
   if (aether >= POWER_COSTS[POWER.AETHER_BLOCK] && !state.aetherBlocked[opp] && !isInCheck(state.board, color)) {
-    if (state.mana[opp] >= 14) candidates.push({ priority: 35, exec: () => castAetherBlock(state), name: 'AETHER_BLOCK' });
+    const threshold = phase < 0.5 ? 12 : 14;
+    if (state.mana[opp] >= threshold) candidates.push({ priority: phase < 0.5 ? 25 : 35, exec: () => castAetherBlock(state), name: 'AETHER_BLOCK' });
   }
 
-  // VENGEANCE
-  if (aether >= POWER_COSTS[POWER.VENGEANCE]) {
-    let bestTarget = null, bestVal = 0;
-    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
-      const p = state.board[r][c];
-      if (!p || p.color === color || p.type === PIECE.KING) continue;
-      if (BOT_PIECE_VALUES[p.type] > bestVal) { bestVal = BOT_PIECE_VALUES[p.type]; bestTarget = { r, c }; }
-    }
-    if (bestTarget && bestVal >= 500) candidates.push({ priority: bestVal * 0.12, exec: () => castVengeance(state, bestTarget.r, bestTarget.c), name: 'VENGEANCE' });
-  }
-
-  // SPAWN
-  if (aether >= POWER_COSTS[POWER.SPAWN] && !isInCheck(state.board, color) && state.fountains) {
+  // SPAWN — only in middlegame, low priority
+  if (phase > 0.5 && aether >= POWER_COSTS[POWER.SPAWN] && !isInCheck(state.board, color) && state.fountains) {
     for (const f of state.fountains) {
       if (state.board[f.r][f.c]) continue;
       const rankFP = color === COLOR.WHITE ? (8 - f.r) : (f.r + 1);
-      if (rankFP >= 1 && rankFP <= 4) { candidates.push({ priority: 20, exec: () => castSpawn(state, f.r, f.c), name: 'SPAWN' }); break; }
+      if (rankFP >= 1 && rankFP <= 4) { candidates.push({ priority: 15, exec: () => castSpawn(state, f.r, f.c), name: 'SPAWN' }); break; }
     }
   }
 
@@ -179,17 +381,24 @@ function botTryPower(state, color, difficulty) {
 function botTrySacrifice(state, color, difficulty) {
   if (!state.aetherBlocked || !state.sacrificedThisTurn) return null;
   if (state.aetherBlocked[color] || state.sacrificedThisTurn[color]) return null;
-  if (state.mana[color] >= 15) return null;
+  const phase = botGamePhase(state);
+  const aetherCap = phase < 0.5 ? 20 : 15;
+  if (state.mana[color] >= aetherCap) return null;
   let bestSac = null, bestCost = Infinity;
   for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
     const p = state.board[r][c];
     if (!p || p.color !== color || p.type === PIECE.KING || p.isSpectral) continue;
     if (difficulty !== 'hard' && (p.type === PIECE.QUEEN || p.type === PIECE.ROOK)) continue;
+    if (difficulty === 'hard' && phase > 0.5 && p.type === PIECE.QUEEN) continue;
     if (p.type === PIECE.PAWN) { const d = color === COLOR.WHITE ? r : (7 - r); if (d <= 2) continue; }
     if (BOT_PIECE_VALUES[p.type] < bestCost) { bestCost = BOT_PIECE_VALUES[p.type]; bestSac = { r, c }; }
   }
   if (!bestSac) return null;
-  const chance = difficulty === 'easy' ? 0.1 : difficulty === 'medium' ? 0.25 : 0.4;
+  const opp = opposite(color);
+  const myMat = botCountMaterial(state, color);
+  const oppMat = botCountMaterial(state, opp);
+  const aheadBonus = (myMat - oppMat > 300 && phase < 0.5) ? 0.3 : 0;
+  const chance = difficulty === 'easy' ? 0.1 : difficulty === 'medium' ? 0.25 : (0.5 + aheadBonus);
   if (Math.random() > chance) return null;
   return bestSac;
 }
