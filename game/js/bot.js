@@ -446,8 +446,8 @@ function botCountMaterial(state, color) {
 // 2-ply with alpha-beta pruning + quiescence on captures.
 // Fast enough for browser: move ordering ensures early cutoffs, and we limit
 // the candidate set at the root to keep wall-clock under ~200ms.
-const BOT_SEARCH_DEPTH = 2; // 2-ply = my move + opponent's best response
-const BOT_ROOT_CANDIDATES = 12; // Only deep-search the top N root moves
+const BOT_SEARCH_DEPTH = 3; // 3-ply = my move + response + my follow-up
+const BOT_ROOT_CANDIDATES = 10; // Only deep-search the top N root moves (tighter at depth 3)
 
 // Quick move-ordering score (no board copies — pure heuristics)
 function botOrderScore(state, m, forColor) {
@@ -743,15 +743,15 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // SPAWN: Place a spectral pawn — LOW priority, only on fountains (no spam)
-  // In endgame, skip Spawn entirely (wastes aether better used for Vengeance/Promote)
-  if (phase > 0.5 && aether >= POWER_COSTS[POWER.SPAWN] && !isInCheck(state.board, forColor)) {
+  // SPAWN: Hard bot NEVER spawns (spectral pawns vanish next turn, waste of aether)
+  // Only easy/medium might use it
+  if (BOT.difficulty !== 'hard' && phase > 0.5 && aether >= POWER_COSTS[POWER.SPAWN] && !isInCheck(state.board, forColor)) {
     for (const f of state.fountains) {
       if (state.board[f.r][f.c]) continue;
       const rankFP = forColor === COLOR.WHITE ? (8 - f.r) : (f.r + 1);
       if (rankFP >= 1 && rankFP <= 4) {
         candidates.push({
-          priority: 15, // lower than before
+          priority: 15,
           exec: () => castSpawn(state, f.r, f.c),
           name: 'SPAWN',
           payload: { power: 'SPAWN', r: f.r, c: f.c }
@@ -761,10 +761,10 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // AETHER BLOCK: Use when opponent is aether-rich
+  // AETHER BLOCK: Only when opponent is close to Vengeance/Promote
   if (aether >= POWER_COSTS[POWER.AETHER_BLOCK] && !state.aetherBlocked[opp] && !isInCheck(state.board, forColor)) {
-    // Only block if opponent could cast something dangerous soon
-    const oppThreshold = phase < 0.5 ? 12 : 14;
+    // Only block if opponent could cast Vengeance or Promote soon
+    const oppThreshold = POWER_COSTS[POWER.PROMOTE] - 3; // at least 12 aether
     if (state.mana[opp] >= oppThreshold) {
       candidates.push({
         priority: phase < 0.5 ? 25 : 35, // lower in endgame (our powers matter more)
@@ -880,17 +880,25 @@ function botConsiderPowers(state, forColor) {
     return candidates[0];
   }
 
-  // Hard: always use the best power if priority is decent
-  // But don't waste aether on low-value powers when saving for Vengeance/Promote
+  // Hard: use powers strategically
   const best = candidates[0];
   if (best.priority < 15) return null;
-  // If we're close to affording a game-changing power, don't waste on small ones
+
+  // CRITICAL: Don't waste aether on cheap powers when we should save for game-changers.
+  // FROST costs 4 but VENGEANCE costs 18 — casting 4-5 Frosts starves Vengeance.
+  // Only allow cheap powers if:
+  //   (a) We already have enough for Vengeance/Promote, OR
+  //   (b) We're at very low aether (< 8) so saving wouldn't reach big powers soon anyway, OR
+  //   (c) The power IS Vengeance/Promote
   const aetherNow = state.mana[forColor];
-  const almostVengeance = aetherNow >= POWER_COSTS[POWER.VENGEANCE] - 4;
-  const almostPromote = aetherNow >= POWER_COSTS[POWER.PROMOTE] - 3;
-  if ((almostVengeance || almostPromote) && best.priority < 50) {
-    // Only cast if it's the big power we're saving for
-    if (best.name !== 'VENGEANCE' && best.name !== 'PROMOTE') return null;
+  const canAffordVengeance = aetherNow >= POWER_COSTS[POWER.VENGEANCE];
+  const canAffordPromote = aetherNow >= POWER_COSTS[POWER.PROMOTE];
+  const isBigPower = best.name === 'VENGEANCE' || best.name === 'PROMOTE';
+
+  if (!isBigPower && !canAffordVengeance && !canAffordPromote) {
+    // We can't afford game-changers yet. Only use cheap powers if aether is very low
+    // (meaning we're far from affording anyway) or if it's high-value Fortify on queen
+    if (aetherNow >= 8) return null; // Save aether — we're getting close to Promote range
   }
   return best;
 }

@@ -242,8 +242,8 @@ function botMoveRepeatCount(from, to) { const k = `${from.r}${from.c}${to.r}${to
 function botClearHistory() { BOT_MOVE_HISTORY.length = 0; }
 
 // ---------- Alpha-Beta Search (mirrors browser bot.js) ----------
-const BOT_SEARCH_DEPTH = 2;
-const BOT_ROOT_CANDIDATES = 12;
+const BOT_SEARCH_DEPTH = 3;
+const BOT_ROOT_CANDIDATES = 10;
 
 function botOrderScore(state, m, forColor) {
   let s = 0;
@@ -428,14 +428,16 @@ function botTryPower(state, color, difficulty) {
     if (bestPiece && bestVal >= 300) candidates.push({ priority: bestVal * 0.08, exec: () => castFortify(state, bestPiece.r, bestPiece.c), name: 'FORTIFY' });
   }
 
-  // AETHER BLOCK
+  // AETHER BLOCK: Only when opponent is close to Vengeance/Promote
   if (aether >= POWER_COSTS[POWER.AETHER_BLOCK] && !state.aetherBlocked[opp] && !isInCheck(state.board, color)) {
-    const threshold = phase < 0.5 ? 12 : 14;
-    if (state.mana[opp] >= threshold) candidates.push({ priority: phase < 0.5 ? 25 : 35, exec: () => castAetherBlock(state), name: 'AETHER_BLOCK' });
+    const oppThreshold = POWER_COSTS[POWER.PROMOTE] - 3; // at least 12 aether
+    if (state.mana[opp] >= oppThreshold) {
+      candidates.push({ priority: phase < 0.5 ? 25 : 35, exec: () => castAetherBlock(state), name: 'AETHER_BLOCK' });
+    }
   }
 
-  // SPAWN — only in middlegame, low priority
-  if (phase > 0.5 && aether >= POWER_COSTS[POWER.SPAWN] && !isInCheck(state.board, color) && state.fountains) {
+  // SPAWN: Hard bot NEVER spawns (spectral pawns vanish next turn, waste of aether)
+  if (difficulty !== 'hard' && phase > 0.5 && aether >= POWER_COSTS[POWER.SPAWN] && !isInCheck(state.board, color) && state.fountains) {
     for (const f of state.fountains) {
       if (state.board[f.r][f.c]) continue;
       const rankFP = color === COLOR.WHITE ? (8 - f.r) : (f.r + 1);
@@ -448,8 +450,14 @@ function botTryPower(state, color, difficulty) {
 
   if (difficulty === 'easy') { if (Math.random() > 0.2) return null; return candidates[Math.floor(Math.random() * candidates.length)]; }
   if (difficulty === 'medium') { if (candidates[0].priority < 30 || Math.random() > 0.4) return null; return candidates[0]; }
-  if (candidates[0].priority < 20) return null;
-  return candidates[0];
+  // Hard: save aether for big powers (Vengeance=18, Promote=15)
+  const best = candidates[0];
+  if (best.priority < 15) return null;
+  const aetherNow = state.mana[color];
+  const isBigPower = best.name === 'VENGEANCE' || best.name === 'PROMOTE';
+  const canAffordBig = aetherNow >= POWER_COSTS[POWER.VENGEANCE] || aetherNow >= POWER_COSTS[POWER.PROMOTE];
+  if (!isBigPower && !canAffordBig && aetherNow >= 8) return null; // save for big powers
+  return best;
 }
 
 function botTrySacrifice(state, color, difficulty) {
