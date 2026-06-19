@@ -625,6 +625,14 @@ function endOfTurn(state) {
     }
   }
 
+  // Insufficient material: only Kings on the board → immediate draw.
+  if (isKingsOnly(state.board, state)) {
+    state.winner = 'DRAW';
+    state.winReason = 'INSUFFICIENT_MATERIAL';
+    state.log.push('Draw — only Kings remain (insufficient material).');
+    return;
+  }
+
   // Check win conditions for opponent (who is about to move).
   // _probing flag is set on cloned states used by canOpponentEscape* — skip the
   // power-aware mate probe there to avoid infinite recursion.

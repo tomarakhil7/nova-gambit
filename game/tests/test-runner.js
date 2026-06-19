@@ -1343,7 +1343,7 @@ group('v3.5: Chronobreak (deep)', () => {
     assertEq(s.bombs.length, 0, 'Bomba reverted');
   });
   test('Chronobreak: rewinds Vengeance destruction', () => {
-    const s = customGame([['e1', PIECE.KING, COLOR.WHITE],['e8', PIECE.KING, COLOR.BLACK],['d4', PIECE.QUEEN, COLOR.WHITE]]);
+    const s = customGame([['e1', PIECE.KING, COLOR.WHITE],['e8', PIECE.KING, COLOR.BLACK],['d4', PIECE.QUEEN, COLOR.WHITE],['a2', PIECE.PAWN, COLOR.WHITE]]);
     s.turn = COLOR.BLACK; s.mana[COLOR.BLACK] = 18; s.mana[COLOR.WHITE] = 30;
     castVengeance(s, 4, 3); // destroy white queen — turn ends
     assert(!s.board[4][3]);
@@ -1352,7 +1352,7 @@ group('v3.5: Chronobreak (deep)', () => {
     assert(s.board[4][3] && s.board[4][3].type === PIECE.QUEEN, 'Queen restored');
   });
   test('Chronobreak: opponent\'s spent aether NOT refunded', () => {
-    const s = customGame([['e1', PIECE.KING, COLOR.WHITE],['e8', PIECE.KING, COLOR.BLACK],['d4', PIECE.QUEEN, COLOR.WHITE]]);
+    const s = customGame([['e1', PIECE.KING, COLOR.WHITE],['e8', PIECE.KING, COLOR.BLACK],['d4', PIECE.QUEEN, COLOR.WHITE],['a2', PIECE.PAWN, COLOR.WHITE]]);
     s.turn = COLOR.BLACK; s.mana[COLOR.BLACK] = 18; s.mana[COLOR.WHITE] = 30;
     castVengeance(s, 4, 3); // black spends 18
     assertEq(s.mana[COLOR.BLACK], 0);

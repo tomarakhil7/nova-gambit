@@ -2069,7 +2069,10 @@ function showGameOverModal() {
   const w = UI.state.winner;
   const reason = UI.state.winReason;
   let title, msg;
-  if (w === 'DRAW') { title = 'Draw by Stalemate'; msg = 'Neither player has legal moves.'; }
+  if (w === 'DRAW') {
+    if (reason === 'INSUFFICIENT_MATERIAL') { title = 'Draw — Insufficient Material'; msg = 'Only Kings remain on the board.'; }
+    else { title = 'Draw by Stalemate'; msg = 'Neither player has legal moves.'; }
+  }
   else {
     title = (w === COLOR.WHITE ? 'White' : 'Black') + ' Wins!';
     const reasons = {

@@ -375,6 +375,22 @@ function isStalemate(board, color, gameState) {
   return !isInCheck(board, color) && allLegalMoves(board, color, gameState).length === 0;
 }
 
+// Insufficient material: only Kings remain on the board (no other pieces at all).
+// In Nova Gambit, powers like Promote/Wall can create new material, so we only
+// declare a draw when BOTH sides have zero non-King pieces AND no pending prisoners.
+function isKingsOnly(board, gameState) {
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (!p) continue;
+      if (p.type !== PIECE.KING) return false;
+    }
+  }
+  // Also check for off-board prisoners waiting to re-enter
+  if (gameState && gameState.pendingPrisoners && gameState.pendingPrisoners.length > 0) return false;
+  return true;
+}
+
 // ---------- Board snapshot/restore (for simulation) ----------
 function snapshot(board) {
   return board.map(row => row.map(p => p ? { ...p } : null));
@@ -438,7 +454,7 @@ function applyMoveRaw(board, fromR, fromC, move, gameState) {
   Object.assign(g, {
     PIECE, COLOR, makePiece, createInitialBoard, inBounds, algebraic, fromAlgebraic,
     findKing, pseudoLegalMoves, legalMoves, allLegalMoves, isInCheck, isCheckmate,
-    isStalemate, isSquareAttacked, opposite, snapshot, restore, applyMoveRaw,
+    isStalemate, isKingsOnly, isSquareAttacked, opposite, snapshot, restore, applyMoveRaw,
     getAttackSquares
   });
 })();
@@ -447,7 +463,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     PIECE, COLOR, makePiece, createInitialBoard, inBounds, algebraic, fromAlgebraic,
     findKing, pseudoLegalMoves, legalMoves, allLegalMoves, isInCheck, isCheckmate,
-    isStalemate, isSquareAttacked, opposite, snapshot, restore, applyMoveRaw,
+    isStalemate, isKingsOnly, isSquareAttacked, opposite, snapshot, restore, applyMoveRaw,
     getAttackSquares
   };
 }
