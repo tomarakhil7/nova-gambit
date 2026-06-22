@@ -205,13 +205,13 @@ const POWER_DETAILS = {
     counter: 'Economy-starve with Aether Block; keep shielded defenders to burn the one shield.'
   },
   [POWER.WALL]: {
-    targeting: 'Your piece (the anchor)',
+    targeting: 'Your piece (the anchor), then choose direction (N/S/E/W)',
     duration: 'Permanent pawns',
     turnEnds: 'Yes',
     canMate: 'No — v3.3 blocks any Wall that would check or mate the enemy King',
-    restrictions: 'New pawns skip last-rank squares. At least 1 empty adjacent square required. Cannot put the enemy King in check.',
-    useCase: 'Build an instant fortress around your King. Cramp an enemy bishop.',
-    counter: 'Capture the anchor; Wall pawns themselves stay and remain targetable.'
+    restrictions: 'Choose one direction to spawn pawns. New pawns skip last-rank squares. At least 1 empty adjacent square in that direction required. Cannot put the enemy King in check.',
+    useCase: 'Build a directional pawn barrier for defense or create an advancing pawn wall toward enemy territory.',
+    counter: 'Capture the anchor; Wall pawns themselves stay and remain targetable. Attack from a different direction.'
   }
 };
 
@@ -637,7 +637,7 @@ function applyReplayAction(s, a) {
     if (p === 'PROMOTE') return castPromote(s, payload.r, payload.c, payload.newType);
     if (p === 'CHRONOBREAK') return castChronobreak(s);
     if (p === 'VENGEANCE') return castVengeance(s, payload.r, payload.c);
-    if (p === 'WALL') return castWall(s, payload.r, payload.c);
+    if (p === 'WALL') return castWall(s, payload.r, payload.c, payload.direction || 'N');
   }
 }
 
@@ -1474,8 +1474,10 @@ function attemptMove(fr, fc, tr, tc) {
     if (!confirm(msg)) { UI.selected = null; UI.legalDots = []; render(); return; }
   }
   pauseClockForAnimation(800);
+  // Capture the piece at target BEFORE making the move (for Chronobreak detection)
+  const capturedPiece = UI.state.board[tr][tc];
   const res = makeMove(UI.state, fr, fc, tr, tc);
-  handleMoveResult(res, fr, fc, tr, tc);
+  handleMoveResult(res, fr, fc, tr, tc, undefined, capturedPiece);
 }
 
 function isMyTurn() {
@@ -1493,12 +1495,12 @@ function netInterceptPower(power, args, sourceSquares = []) {
   return true;
 }
 
-function handleMoveResult(res, fr, fc, tr, tc, promotion) {
+function handleMoveResult(res, fr, fc, tr, tc, promotion, capturedPiece) {
   UI.selected = null; UI.legalDots = [];
   if (res.error) { setStatus(res.error, 'err'); render(); return; }
   // Record successful move for post-game study
   const moverColor = UI.state.turn === COLOR.WHITE ? COLOR.BLACK : COLOR.WHITE; // turn already switched
-  recordAction('MOVE', moverColor, { from: { r: fr, c: fc }, to: { r: tr, c: tc }, promotion: promotion || undefined });
+  recordAction('MOVE', moverColor, { from: { r: fr, c: fc }, to: { r: tr, c: tc }, promotion: promotion || undefined, captured: capturedPiece });
   if (res.shieldBroke) { playVfx('fortify', tr, tc); setStatus('Shield blocked!', 'warn'); }
   else if (res.defused) { setStatus('Bomba defused!', 'ok'); floatingText('DEFUSED', tr, tc, 'aether'); }
   else { setStatus('Move made.', 'ok'); }
@@ -1658,16 +1660,18 @@ function handlePowerClick(r, c) {
   if (p === POWER.WALL) {
     const piece = UI.state.board[r][c];
     if (piece && piece.type === PIECE.KING) { setStatus('King cannot anchor The Wall.', 'err'); return; }
-    if (netInterceptPower('WALL', { r, c })) return;
-    const wallCaster = UI.state.turn;
-    pauseClockForAnimation(1800);
-    const res = castWall(UI.state, r, c);
-    if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; render(); return; }
-    recordAction('POWER_CAST', wallCaster, { power: 'WALL', r, c });
-    setStatus(`The Wall: ${res.spawned} pawns.`, 'ok');
-    playVfx('wall', r, c);
-    if (!UI.state.winner) switchClockTo(UI.state.turn);
-    UI.activePower = null; render(); return;
+
+    // First click: store anchor and show direction picker
+    if (!UI.powerState.anchor) {
+      if (!piece || piece.color !== UI.state.turn) { setStatus('Select your piece.', 'warn'); return; }
+      UI.powerState.anchor = { r, c };
+      showWallDirectionPicker(r, c);
+      return;
+    }
+
+    // This shouldn't be reached (direction is chosen via modal), but kept for safety
+    setStatus('Please choose a direction from the picker.', 'warn');
+    return;
   }
 
   if (p === POWER.PROMOTE) {
@@ -1841,6 +1845,69 @@ function showPromotePowerDialog(r, c) {
       render();
     });
   });
+}
+
+function showWallDirectionPicker(r, c) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal wall-direction-modal">
+      <h2>▧ The Wall</h2>
+      <p>Choose a direction to spawn pawns:</p>
+      <div class="wall-direction-grid">
+        <button class="wall-dir-btn" data-dir="N">
+          <span class="wall-dir-arrow">↑</span>
+          <span class="wall-dir-label">North</span>
+        </button>
+        <button class="wall-dir-btn" data-dir="W">
+          <span class="wall-dir-arrow">←</span>
+          <span class="wall-dir-label">West</span>
+        </button>
+        <button class="wall-dir-btn" data-dir="E">
+          <span class="wall-dir-arrow">→</span>
+          <span class="wall-dir-label">East</span>
+        </button>
+        <button class="wall-dir-btn" data-dir="S">
+          <span class="wall-dir-arrow">↓</span>
+          <span class="wall-dir-label">South</span>
+        </button>
+      </div>
+      <div class="actions" style="margin-top:12px;">
+        <button id="wall-cancel">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+
+  backdrop.querySelectorAll('.wall-dir-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const direction = btn.dataset.dir;
+      document.body.removeChild(backdrop);
+      executeWallCast(r, c, direction);
+    });
+  });
+
+  backdrop.querySelector('#wall-cancel').addEventListener('click', () => {
+    document.body.removeChild(backdrop);
+    UI.activePower = null;
+    UI.powerState = {};
+    render();
+  });
+}
+
+function executeWallCast(r, c, direction) {
+  if (netInterceptPower('WALL', { r, c, direction })) return;
+  const wallCaster = UI.state.turn;
+  pauseClockForAnimation(1800);
+  const res = castWall(UI.state, r, c, direction);
+  if (res.error) { setStatus(res.error, 'err'); UI.activePower = null; UI.powerState = {}; render(); return; }
+  recordAction('POWER_CAST', wallCaster, { power: 'WALL', r, c, direction });
+  const dirName = { N: 'North', S: 'South', E: 'East', W: 'West' }[direction];
+  setStatus(`The Wall (${dirName}): ${res.spawned} pawns.`, 'ok');
+  playVfx('wall', r, c);
+  if (!UI.state.winner) switchClockTo(UI.state.turn);
+  UI.activePower = null;
+  UI.powerState = {};
+  render();
 }
 
 // Blink helpers — used to prune the UI hint set. Mirror the engine's validation
@@ -2046,8 +2113,10 @@ function showPromotionDialog(color) {
         return;
       }
       pauseClockForAnimation(800);
+      // Capture the piece at target BEFORE making the move (for Chronobreak detection)
+      const capturedPiece = UI.state.board[p.tr][p.tc];
       const res = makeMove(UI.state, p.fr, p.fc, p.tr, p.tc, type);
-      handleMoveResult(res, p.fr, p.fc, p.tr, p.tc, type);
+      handleMoveResult(res, p.fr, p.fc, p.tr, p.tc, type, capturedPiece);
     });
   });
 }

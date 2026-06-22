@@ -78,11 +78,11 @@ const POWER_DESCRIPTIONS = {
   [POWER.DOUBLE_ATTACK]: 'Choose one of your pieces and take TWO actions with it this turn. Each step can be a move OR a capture (any legal action for that piece). The second step starts from wherever the first one landed. Cannot target the King. Cannot deliver checkmate. Turn ends.',
   [POWER.IMPRISON]: 'Capture an adjacent enemy non-King piece INSIDE your piece. Captor can still move normally. If the captor dies, the prisoner returns to its OWN starting tile (e.g. a black knight from b8 returns to b8); if that tile is occupied, the prisoner waits OFF-BOARD until the home tile becomes free, then re-enters automatically at the start of its owner\'s turn. Cannot imprison frozen, Spectral, or already-captor pieces. Turn continues.',
   [POWER.AETHER_BLOCK]: 'Silence your opponent — they cannot spend Aether on their next turn. Active effects still tick. Turn continues.',
-  [POWER.CLEANSE]: 'Remove Imprisonment and/or Frost from any piece (yours or theirs). Releases any prisoner inside — the prisoner returns to its OWN starting tile (e.g. b8 knight → b8). If that tile is occupied, the prisoner waits OFF-BOARD until the home tile becomes free, then re-enters at the start of its owner\'s turn. Turn continues.',
+  [POWER.CLEANSE]: 'Remove Imprisonment and/or Frost and/or Shield from any piece (yours or theirs). Can target the imprisoner to free the prisoner, or the imprisoned piece directly. Releases any prisoner inside — the prisoner returns to its OWN starting tile (e.g. b8 knight → b8). If that tile is occupied, the prisoner waits OFF-BOARD until the home tile becomes free, then re-enters at the start of its owner\'s turn. Removes shields from shielded pieces. Turn continues.',
   [POWER.PROMOTE]: 'Instantly promote any of your pawns to Queen, Rook, Bishop, or Knight (not Spectral). Turn ends.',
   [POWER.CHRONOBREAK]: "Undo opponent's ENTIRE previous turn — every move, capture, and power they cast (Frost, Fortify, Blink, Spawn, Bomba, Double Attack, Imprison, Aether Block, Cleanse, Promote, Vengeance, The Wall) — restoring board, prisoners, shields, freezes, bombs, blocks, and per-turn flags. Their spent Aether is NOT refunded. Cannot Chronobreak a Chronobreak. CANNOT undo a checkmate (the game is already over). Turn continues.",
   [POWER.VENGEANCE]: 'Destroy any 1 enemy non-King piece anywhere on the board. Bypasses shield (shield absorbs 1 then piece dies). Cannot leave your King in check. Cannot deliver checkmate. Turn ends.',
-  [POWER.WALL]: 'Spawn friendly pawns on every empty adjacent square around one of your pieces (up to 8). Skips last-rank squares. Cannot be cast if the spawned pawns would give check or mate to the enemy King. Turn ends.'
+  [POWER.WALL]: 'Choose one direction (North, South, East, or West) and spawn friendly pawns on empty adjacent squares in that direction around one of your pieces (up to 3). Skips last-rank squares. Cannot be cast if the spawned pawns would give check or mate to the enemy King. Turn ends.'
 };
 
 const SACRIFICE_VALUES = {
@@ -446,22 +446,25 @@ function canOpponentEscapeMateWithPowers(state, color) {
     }
   }
 
-  // Wall — spawn pawns around an anchor that may block the check.
+  // Wall — spawn pawns around an anchor that may block the check (try all directions)
   if (aether >= POWER_COSTS[POWER.WALL]) {
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color !== color) continue;
-      if (tryOn(p2 => castWall(p2, r, c))) return true;
+      for (const dir of ['N', 'S', 'E', 'W']) {
+        if (tryOn(p2 => castWall(p2, r, c, dir))) return true;
+      }
     }
   }
 
-  // Cleanse — freeing an imprisoned friendly returns it home and may block the check.
+  // Cleanse — freeing an imprisoned friendly returns it home and may block the check, or removing shield.
   if (aether >= POWER_COSTS[POWER.CLEANSE]) {
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.type === PIECE.KING) continue;
       const hasFrost = !!(p.frozenUntil && p.frozenUntil > state.turnNumber);
-      if (!hasFrost && !p.imprisoned) continue;
+      const hasShield = !!(p.shieldHP && p.shieldHP > 0);
+      if (!hasFrost && !p.imprisoned && !hasShield) continue;
       if (tryOn(p2 => castCleanse(p2, r, c))) return true;
     }
   }
@@ -492,7 +495,9 @@ function canOpponentEscapeStalemateWithPowers(state, color) {
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color !== color) continue;
-      if (tryOn(p2 => castWall(p2, r, c))) return true;
+      for (const dir of ['N', 'S', 'E', 'W']) {
+        if (tryOn(p2 => castWall(p2, r, c, dir))) return true;
+      }
     }
   }
   if (aether >= POWER_COSTS[POWER.CLEANSE]) {
@@ -500,7 +505,8 @@ function canOpponentEscapeStalemateWithPowers(state, color) {
       const p = state.board[r][c];
       if (!p || p.type === PIECE.KING) continue;
       const hasFrost = !!(p.frozenUntil && p.frozenUntil > state.turnNumber);
-      if (!hasFrost && !p.imprisoned) continue;
+      const hasShield = !!(p.shieldHP && p.shieldHP > 0);
+      if (!hasFrost && !p.imprisoned && !hasShield) continue;
       if (tryOn(p2 => castCleanse(p2, r, c))) return true;
     }
   }
@@ -797,6 +803,13 @@ function makeMove(state, fromR, fromC, toR, toC, promotionType) {
 
   state.lastMoveInfo = { type:'MOVE', from:{r:fromR,c:fromC}, to:{r:toR,c:toC}, captured:capturedPiece, defused };
   state.lastActionKind = 'MOVE';
+
+  // Check if move put opponent in check (including discovered check)
+  const opp = opposite(state.turn);
+  if (isInCheck(state.board, opp)) {
+    state.log.push(`${colorName(opp)} is in check.`);
+  }
+
   clearPerTurnEffects(state, state.turn);
   endOfTurn(state);
   return { success: true, captured: capturedPiece, defused };
@@ -1241,8 +1254,9 @@ function castAetherBlock(state) {
   return { success: true };
 }
 
-// CLEANSE — remove Imprison and/or Frost from any piece (own or enemy).
+// CLEANSE — remove Imprison and/or Frost and/or Shield from any piece (own or enemy).
 // If the target is a captor, its prisoner is released to its home tile (or destroyed if occupied).
+// If the target has a shield, the shield is removed.
 // Does not target the King (kings can't be frozen or imprisoned anyway, but explicit for clarity).
 // Turn continues.
 function castCleanse(state, r, c) {
@@ -1254,7 +1268,8 @@ function castCleanse(state, r, c) {
   if (target.type === PIECE.KING) return { error: 'Cannot target the King' };
   const wasFrozen = !!(target.frozenUntil && target.frozenUntil > state.turnNumber);
   const wasCaptor = !!target.imprisoned;
-  if (!wasFrozen && !wasCaptor) return { error: 'Nothing to cleanse on this piece' };
+  const hadShield = !!(target.shieldHP && target.shieldHP > 0);
+  if (!wasFrozen && !wasCaptor && !hadShield) return { error: 'Nothing to cleanse on this piece' };
 
   pushHistory(state);
   let releasedInfo = null;
@@ -1265,17 +1280,22 @@ function castCleanse(state, r, c) {
   if (wasFrozen) {
     target.frozenUntil = 0;
   }
+  if (hadShield) {
+    target.shieldHP = 0;
+    target.shieldExpiresOn = 0;
+  }
 
   spendAether(state, color, POWER_COSTS[POWER.CLEANSE]);
   const parts = [];
   if (wasCaptor) parts.push('freed prisoner');
   if (wasFrozen) parts.push('thawed frost');
+  if (hadShield) parts.push('removed shield');
   state.log.push(`${colorName(color)} ✨ Cleanse on ${pieceTypeShort(target.type)} at ${algebraic(r,c)}: ${parts.join(' + ')}.`);
   // v3.5: rollback on self-check; pass-turn if we put opponent in check.
   const post = resolveContinuesTurnCast(state, color, { selfCheckMsg: 'Cleanse would leave your King in check' });
   if (post.rollback) { popHistory(state); return { error: post.error }; }
   state.lastActionKind = 'POWER';
-  return { success: true, released: releasedInfo, thawed: wasFrozen, passedTurn: !!post.passedTurn };
+  return { success: true, released: releasedInfo, thawed: wasFrozen, shieldRemoved: hadShield, passedTurn: !!post.passedTurn };
 }
 
 // PROMOTE
@@ -1401,7 +1421,7 @@ function castVengeance(state, r, c) {
 }
 
 // THE WALL
-function castWall(state, r, c) {
+function castWall(state, r, c, direction) {
   if (state.winner) return { error: 'Game over' };
   const color = state.turn;
   const err = requireAether(state, color, POWER.WALL); if (err) return { error: err };
@@ -1409,20 +1429,41 @@ function castWall(state, r, c) {
   if (!anchor) return { error: 'No anchor piece' };
   if (anchor.color !== color) return { error: 'Anchor must be your piece' };
   if (anchor.type === PIECE.KING) return { error: 'King cannot anchor The Wall' };
+  if (!direction) return { error: 'Direction required: N, S, E, or W' };
 
-  // Determine eligible neighbor squares. Skip the *caster's* promotion rank only —
-  // a pawn placed there would immediately become a Queen on the next move, which
-  // would feel like a free promotion. White pawns promote on row 0; black on row 7.
+  // Validate direction
+  const validDirections = ['N', 'S', 'E', 'W'];
+  if (!validDirections.includes(direction)) {
+    return { error: 'Invalid direction. Use N, S, E, or W' };
+  }
+
+  // Determine eligible neighbor squares in the chosen direction only.
+  // Skip the *caster's* promotion rank — a pawn placed there would immediately
+  // become a Queen on the next move, which would feel like a free promotion.
+  // White pawns promote on row 0; black on row 7.
   const promoRank = color === COLOR.WHITE ? 0 : 7;
   const spawnSquares = [];
+
+  // Direction mapping: N = lower row, S = higher row, E = higher col, W = lower col
   for (const [dr, dc] of [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]]) {
     const nr = r + dr, nc = c + dc;
     if (!inBounds(nr, nc)) continue;
     if (state.board[nr][nc]) continue;
     if (nr === promoRank) continue;
-    spawnSquares.push({ r: nr, c: nc });
+
+    // Filter by direction: only spawn in the chosen direction
+    let inDirection = false;
+    if (direction === 'N' && nr < r) inDirection = true;       // North: squares above
+    else if (direction === 'S' && nr > r) inDirection = true;  // South: squares below
+    else if (direction === 'E' && nc > c) inDirection = true;  // East: squares to right
+    else if (direction === 'W' && nc < c) inDirection = true;  // West: squares to left
+
+    if (inDirection) {
+      spawnSquares.push({ r: nr, c: nc });
+    }
   }
-  if (spawnSquares.length === 0) return { error: 'No empty adjacent squares to spawn' };
+
+  if (spawnSquares.length === 0) return { error: 'No empty adjacent squares in that direction' };
 
   pushHistory(state);
   for (const sq of spawnSquares) {
@@ -1446,12 +1487,13 @@ function castWall(state, r, c) {
   }
 
   spendAether(state, color, POWER_COSTS[POWER.WALL]);
-  state.log.push(`${colorName(color)} ▧ The Wall: ${spawnSquares.length} pawns spawned around ${pieceTypeShort(anchor.type)} at ${algebraic(r,c)}.`);
-  state.lastMoveInfo = { type: 'WALL', to: {r,c} };
+  const dirName = { N: 'North', S: 'South', E: 'East', W: 'West' }[direction];
+  state.log.push(`${colorName(color)} ▧ The Wall (${dirName}): ${spawnSquares.length} pawns spawned around ${pieceTypeShort(anchor.type)} at ${algebraic(r,c)}.`);
+  state.lastMoveInfo = { type: 'WALL', to: {r,c}, direction };
   state.lastActionKind = 'POWER';
   clearPerTurnEffects(state, state.turn);
   endOfTurn(state);
-  return { success: true, spawned: spawnSquares.length };
+  return { success: true, spawned: spawnSquares.length, direction };
 }
 
 // ---------- Bomb mechanics ----------

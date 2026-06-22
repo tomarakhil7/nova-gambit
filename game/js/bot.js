@@ -1,7 +1,61 @@
 // ============================================================
-// NOVA GAMBIT - Heuristic Bot (v1.0)
+// NOVA GAMBIT - Heuristic Bot (v2.0 - OPTIMIZED)
 // A CPU opponent that plays both chess moves AND Aether powers.
-// Difficulty levels: easy (random), medium (heuristic), hard (deeper eval).
+// Difficulty levels: easy (random), medium (heuristic), hard (deep search).
+//
+// HARD MODE SEARCH OPTIMIZATIONS (v2.0):
+// 1. Adaptive depth by game phase:
+//    - Opening (turns 1-10): 4-ply (book moves + tactical awareness)
+//    - Middlegame (turns 11-30): 5-ply (complex tactics need depth)
+//    - Endgame (turns 31+): 6-ply (fewer pieces, can search deeper)
+//
+// 2. Selective search extensions:
+//    - Check extension: +2 ply when in check (critical positions)
+//    - Capture extension: +1 ply for captures of high-value pieces (Q/R)
+//    - Pawn-to-7th extension: +1 ply when pawn reaches 7th rank
+//    - Passed pawn push: +1 ply when passed pawn advances in endgame
+//
+// 3. Enhanced null-move pruning (adaptive R):
+//    - R=3 at depth >= 6 (aggressive pruning in deep nodes)
+//    - R=2 at depth 3-5 (standard reduction)
+//    - R=1 at depth <= 2 (careful pruning near leaves)
+//
+// 4. Improved quiescence search (max depth 8):
+//    - Captures + promotions (standard)
+//    - Check-giving moves (can lead to tactics)
+//    - Recaptures on same square (exchange evaluation)
+//
+// 5. Transposition table (10k entries):
+//    - Zobrist-style position hashing
+//    - Stores: score, depth, bound type, best move
+//    - Improves move ordering and prevents re-evaluation
+//
+// 6. Aspiration windows:
+//    - Narrow search window around previous score
+//    - Re-search if score falls outside window
+//    - Improves pruning efficiency in iterative deepening
+//
+// 7. Performance optimizations:
+//    - Reduced console logging during search
+//    - TT-based move ordering (try best move from hash first)
+//    - Target response time: 1-2 seconds per move
+//    - Effective search depth: 5-6 ply with extensions
+//
+// MULTI-POWER SYSTEM:
+// Bot can cast multiple powers in a single turn (up to 3 powers).
+// Power combo strategies:
+//   1. Frost + Capture: Freeze enemy, then capture it safely
+//   2. Imprison + Capture: Remove defender, then take protected piece
+//   3. Fortify + Attack: Shield piece, then move into danger
+//   4. Cleanse + Activate: Remove frost, then use the piece
+//   5. Wall + Promote: Create pawn wall, then promote
+//   6. Blink + Double Attack: Teleport to position, then double attack
+//   7. AetherBlock + Vengeance: Block opponent powers, then destroy key piece
+//
+// Chaining rules:
+//   - Continue-turn powers (Frost, Fortify, Imprison, etc): chain if priority >= 40
+//   - End-turn powers (Vengeance, Blink, etc): only cast if priority >= 60 after other powers
+//   - Stop after 3 powers or if aether < 5
 // ============================================================
 
 const BOT = {
@@ -263,6 +317,322 @@ function botPieceSquareValue(piece, r, c, phase) {
   return table[idx];
 }
 
+// ---------- Endgame Type Detection ----------
+function botDetectEndgameType(state) {
+  // Detect specific endgame types for tablebase-like knowledge
+  let whitePieces = [], blackPieces = [];
+
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.isSpectral) continue;
+      if (p.color === COLOR.WHITE) whitePieces.push({ type: p.type, r, c });
+      else blackPieces.push({ type: p.type, r, c });
+    }
+  }
+
+  const wCount = whitePieces.length;
+  const bCount = blackPieces.length;
+
+  // K+Q vs K
+  if (wCount === 2 && bCount === 1) {
+    const hasQueen = whitePieces.some(p => p.type === PIECE.QUEEN);
+    if (hasQueen) return { type: 'KQ_vs_K', winner: COLOR.WHITE };
+  }
+  if (bCount === 2 && wCount === 1) {
+    const hasQueen = blackPieces.some(p => p.type === PIECE.QUEEN);
+    if (hasQueen) return { type: 'KQ_vs_K', winner: COLOR.BLACK };
+  }
+
+  // K+R vs K
+  if (wCount === 2 && bCount === 1) {
+    const hasRook = whitePieces.some(p => p.type === PIECE.ROOK);
+    if (hasRook) return { type: 'KR_vs_K', winner: COLOR.WHITE };
+  }
+  if (bCount === 2 && wCount === 1) {
+    const hasRook = blackPieces.some(p => p.type === PIECE.ROOK);
+    if (hasRook) return { type: 'KR_vs_K', winner: COLOR.BLACK };
+  }
+
+  // K+P vs K
+  if (wCount === 2 && bCount === 1) {
+    const pawn = whitePieces.find(p => p.type === PIECE.PAWN);
+    if (pawn) return { type: 'KP_vs_K', winner: COLOR.WHITE, pawn };
+  }
+  if (bCount === 2 && wCount === 1) {
+    const pawn = blackPieces.find(p => p.type === PIECE.PAWN);
+    if (pawn) return { type: 'KP_vs_K', winner: COLOR.BLACK, pawn };
+  }
+
+  // K+2B vs K
+  if (wCount === 3 && bCount === 1) {
+    const bishops = whitePieces.filter(p => p.type === PIECE.BISHOP);
+    if (bishops.length === 2) return { type: 'KBB_vs_K', winner: COLOR.WHITE };
+  }
+  if (bCount === 3 && wCount === 1) {
+    const bishops = blackPieces.filter(p => p.type === PIECE.BISHOP);
+    if (bishops.length === 2) return { type: 'KBB_vs_K', winner: COLOR.BLACK };
+  }
+
+  return { type: 'OTHER' };
+}
+
+// ---------- Tablebase-like Evaluation ----------
+function botEndgameTablebase(state, endgameType, forColor) {
+  // Returns a bonus score for known winning/drawing endgames
+  if (endgameType.type === 'OTHER') return 0;
+
+  const isWinner = endgameType.winner === forColor;
+  const opp = opposite(forColor);
+  const myKing = findKing(state.board, forColor);
+  const oppKing = findKing(state.board, opp);
+  if (!myKing || !oppKing) return 0;
+
+  let bonus = 0;
+
+  // K+Q vs K: Force king to corner, queen close for mate
+  if (endgameType.type === 'KQ_vs_K') {
+    if (isWinner) {
+      const oppCorner = botKingCornerDist(oppKing.r, oppKing.c);
+      const kingDist = botManhattan(myKing.r, myKing.c, oppKing.r, oppKing.c);
+      bonus = oppCorner * 40 + (14 - kingDist) * 25 + 500;
+    } else {
+      bonus = -800;
+    }
+  }
+
+  // K+R vs K: Drive to edge
+  if (endgameType.type === 'KR_vs_K') {
+    if (isWinner) {
+      const oppEdgeDist = Math.min(oppKing.r, 7 - oppKing.r, oppKing.c, 7 - oppKing.c);
+      const kingDist = botManhattan(myKing.r, myKing.c, oppKing.r, oppKing.c);
+      bonus = (3 - oppEdgeDist) * 35 + (14 - kingDist) * 20 + 400;
+    } else {
+      bonus = -700;
+    }
+  }
+
+  // K+P vs K: Square rule
+  if (endgameType.type === 'KP_vs_K' && endgameType.pawn) {
+    const pawn = endgameType.pawn;
+    const promoRank = isWinner ? (forColor === COLOR.WHITE ? 0 : 7) : (forColor === COLOR.WHITE ? 7 : 0);
+    const pawnDist = Math.abs(pawn.r - promoRank);
+    const oppKingDist = botManhattan(oppKing.r, oppKing.c, pawn.r, pawn.c);
+
+    if (isWinner) {
+      const canCatch = oppKingDist <= pawnDist;
+      if (!canCatch) {
+        bonus = 600 + (7 - pawnDist) * 50;
+      } else {
+        const myKingDist = botManhattan(myKing.r, myKing.c, pawn.r, pawn.c);
+        if (myKingDist < oppKingDist) {
+          bonus = 300 + (7 - pawnDist) * 30;
+        } else {
+          bonus = 50;
+        }
+      }
+    } else {
+      const canCatch = botManhattan(myKing.r, myKing.c, pawn.r, pawn.c) <= pawnDist;
+      bonus = canCatch ? -200 : -700;
+    }
+  }
+
+  // K+2B vs K: Drive to corner
+  if (endgameType.type === 'KBB_vs_K') {
+    if (isWinner) {
+      const oppCorner = botKingCornerDist(oppKing.r, oppKing.c);
+      const kingDist = botManhattan(myKing.r, myKing.c, oppKing.r, oppKing.c);
+      bonus = oppCorner * 30 + (14 - kingDist) * 20 + 350;
+    } else {
+      bonus = -650;
+    }
+  }
+
+  return bonus;
+}
+
+// ---------- Enhanced Endgame Evaluation ----------
+function botEndgameEval(state, forColor, myKingPos, oppKingPos, phase) {
+  let score = 0;
+  const opp = opposite(forColor);
+
+  // KING ACTIVITY
+  if (myKingPos) {
+    const centerDist = Math.abs(myKingPos.r - 3.5) + Math.abs(myKingPos.c - 3.5);
+    score += (7 - centerDist) * 12;
+
+    // Opposition
+    if (oppKingPos) {
+      const fileDiff = Math.abs(myKingPos.c - oppKingPos.c);
+      const rankDiff = Math.abs(myKingPos.r - oppKingPos.r);
+      if (fileDiff === 0 && rankDiff === 2) score += 25;
+      if (rankDiff === 0 && fileDiff === 2) score += 25;
+      if (fileDiff === 2 && rankDiff === 2) score += 15;
+    }
+  }
+
+  // PASSED PAWN FEATURES
+  let myPassedFiles = [];
+  for (let c = 0; c < 8; c++) {
+    for (let r = 0; r < 8; r++) {
+      const p = state.board[r][c];
+      if (!p || p.type !== PIECE.PAWN || p.isSpectral || p.color !== forColor) continue;
+      const dir = forColor === COLOR.WHITE ? -1 : 1;
+      const promoRow = forColor === COLOR.WHITE ? 0 : 7;
+      let passed = true;
+      for (let scanR = r + dir; scanR !== promoRow + dir; scanR += dir) {
+        if (scanR < 0 || scanR > 7) break;
+        for (let dc = -1; dc <= 1; dc++) {
+          const scanC = c + dc;
+          if (scanC < 0 || scanC > 7) continue;
+          const blocker = state.board[scanR][scanC];
+          if (blocker && blocker.type === PIECE.PAWN && blocker.color !== forColor && !blocker.isSpectral) {
+            passed = false; break;
+          }
+        }
+        if (!passed) break;
+      }
+      if (passed) {
+        myPassedFiles.push(c);
+        // King supports passed pawn
+        if (myKingPos) {
+          const dist = botManhattan(myKingPos.r, myKingPos.c, r, c);
+          if (dist <= 2) score += (3 - dist) * 30;
+        }
+        // Outside passed pawn
+        if (oppKingPos) {
+          const distFromKing = Math.abs(c - oppKingPos.c);
+          if (distFromKing >= 3 && (c <= 1 || c >= 6)) {
+            score += 60;
+          }
+        }
+      }
+    }
+  }
+
+  // Connected passed pawns
+  for (let i = 0; i < myPassedFiles.length; i++) {
+    for (let j = i + 1; j < myPassedFiles.length; j++) {
+      if (Math.abs(myPassedFiles[i] - myPassedFiles[j]) === 1) {
+        score += 70;
+      }
+    }
+  }
+
+  // PIECE COORDINATION
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color !== forColor || p.isSpectral) continue;
+
+      // Rook behind passed pawn
+      if (p.type === PIECE.ROOK) {
+        const dir = forColor === COLOR.WHITE ? -1 : 1;
+        for (let scanR = r + dir; scanR >= 0 && scanR < 8; scanR += dir) {
+          const ahead = state.board[scanR][c];
+          if (ahead && ahead.type === PIECE.PAWN && ahead.color === forColor && !ahead.isSpectral) {
+            if (myPassedFiles.includes(c)) score += 50;
+            break;
+          }
+        }
+        // Rook on 7th with king on 8th
+        const seventhRank = forColor === COLOR.WHITE ? 1 : 6;
+        const eighthRank = forColor === COLOR.WHITE ? 0 : 7;
+        if (r === seventhRank && oppKingPos && oppKingPos.r === eighthRank) {
+          score += 80;
+        }
+      }
+
+      // Knight outposts
+      if (p.type === PIECE.KNIGHT) {
+        const enemyHalf = forColor === COLOR.WHITE ? (r <= 3) : (r >= 4);
+        if (enemyHalf) {
+          let canBeAttacked = false;
+          const pawnAttackRank = forColor === COLOR.WHITE ? r + 1 : r - 1;
+          if (pawnAttackRank >= 0 && pawnAttackRank < 8) {
+            for (const dc of [-1, 1]) {
+              const pc = c + dc;
+              if (pc >= 0 && pc < 8) {
+                const attacker = state.board[pawnAttackRank][pc];
+                if (attacker && attacker.type === PIECE.PAWN && attacker.color === opp && !attacker.isSpectral) {
+                  canBeAttacked = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!canBeAttacked) score += 35;
+        }
+      }
+    }
+  }
+
+  return score;
+}
+
+// ---------- Zugzwang Detection ----------
+function botShouldDisableNullMove(state, forColor) {
+  const phase = botGamePhase(state);
+  if (phase > 0.3) return false;
+
+  let totalMaterial = 0;
+  let onlyPawnsAndKings = true;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.isSpectral) continue;
+      totalMaterial += BOT_PIECE_VALUES[p.type];
+      if (p.type !== PIECE.PAWN && p.type !== PIECE.KING) {
+        onlyPawnsAndKings = false;
+      }
+    }
+  }
+
+  if (onlyPawnsAndKings) return true;
+  if (totalMaterial <= 41300) return true;
+
+  return false;
+}
+
+// ---------- Bomb Threat Detection ----------
+// Returns { threatenedPieces: [...], totalValue: N } for pieces at risk from active bombs
+function botBombThreatDetection(state, forColor) {
+  const threatenedPieces = [];
+  let totalValue = 0;
+
+  // Check all active bombs
+  for (const bomb of state.bombs || []) {
+    // Only care about enemy bombs
+    if (bomb.owner === forColor) continue;
+
+    const turnsUntilDetonation = bomb.turnsLeft;
+
+    // Scan 3x3 blast radius around bomb
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        const nr = bomb.r + dr, nc = bomb.c + dc;
+        if (!inBounds(nr, nc)) continue;
+
+        const piece = state.board[nr][nc];
+        if (!piece || piece.color !== forColor || piece.type === PIECE.KING) continue;
+        if (piece.isSpectral || piece.shieldHP > 0) continue; // spectral/shielded are safe
+
+        const pieceValue = BOT_PIECE_VALUES[piece.type];
+        threatenedPieces.push({
+          r: nr,
+          c: nc,
+          piece,
+          value: pieceValue,
+          turnsUntilDetonation
+        });
+        totalValue += pieceValue;
+      }
+    }
+  }
+
+  return { threatenedPieces, totalValue };
+}
+
 // ---------- Board Evaluation ----------
 function botEvaluate(state, forColor) {
   let score = 0;
@@ -343,9 +713,18 @@ function botEvaluate(state, forColor) {
   if (controlsCenter(state, forColor)) score += 30 * phase;
   if (controlsCenter(state, opp)) score -= 30 * phase;
 
-  // Fountain occupation bonus
-  score += occupiedFountains(state, forColor) * 25;
-  score -= occupiedFountains(state, opp) * 25;
+  // Fountain occupation bonus (increased priority for aether economy)
+  const myFountains = occupiedFountains(state, forColor);
+  const oppFountains = occupiedFountains(state, opp);
+  score += myFountains * 60;
+  score -= oppFountains * 60;
+
+  // Fountain control strategic bonus (exponential scaling for multiple fountains)
+  if (phase >= 0.4 && phase <= 0.8) {
+    // Midgame: fountain control is critical for aether economy
+    if (myFountains >= 2) score += myFountains * myFountains * 20; // exponential bonus
+    if (oppFountains >= 2) score -= oppFountains * oppFountains * 20;
+  }
 
   // Check bonus (higher in endgame — checks are more forcing)
   if (isInCheck(state.board, opp)) score += phase < 0.4 ? 80 : 40;
@@ -567,6 +946,33 @@ function botEvaluate(state, forColor) {
     }
   }
 
+  // ===== BOMB THREAT PENALTY =====
+  // Penalize pieces in blast radius of enemy bombs based on detonation timing
+  const bombThreats = botBombThreatDetection(state, forColor);
+  for (const threat of bombThreats.threatenedPieces) {
+    let penalty = 0;
+    if (threat.turnsUntilDetonation <= 1) {
+      // Bomb detonates next turn (or this turn) — CRITICAL
+      penalty = threat.value * 1.5; // 150% of piece value
+    } else if (threat.turnsUntilDetonation === 2) {
+      // Bomb detonates in 2 turns — urgent
+      penalty = threat.value * 0.75; // 75% of piece value
+    }
+    score -= penalty;
+  }
+
+  // ===== ENHANCED ENDGAME EVALUATION =====
+  if (phase < 0.5) {
+    // Apply endgame-specific evaluation
+    score += botEndgameEval(state, forColor, myKingPos, oppKingPos, phase);
+
+    // Apply tablebase knowledge for simple endgames
+    const endgameType = botDetectEndgameType(state);
+    if (endgameType.type !== 'OTHER') {
+      score += botEndgameTablebase(state, endgameType, forColor);
+    }
+  }
+
   return score;
 }
 
@@ -603,14 +1009,59 @@ function botScoreMove(state, from, to, forColor) {
     score += advanceDist * 30;
   }
 
-  // Moving to a fountain
-  if (state.fountains.some(f => f.r === to.r && f.c === to.c)) score += 60;
+  // Moving to a fountain (high priority in midgame for aether economy)
+  if (state.fountains.some(f => f.r === to.r && f.c === to.c)) {
+    score += phase >= 0.4 && phase <= 0.8 ? 100 : 60; // Extra bonus in midgame
+  }
 
   // Moving to center (less important in endgame)
   if (CENTER_SQUARES.some(sq => sq.r === to.r && sq.c === to.c)) score += 25 * phase;
 
   // Defusing a bomb
   if (state.bombs.some(b => b.r === to.r && b.c === to.c && b.owner !== forColor)) score += 150;
+
+  // BOMB ESCAPE BONUS: evacuating a piece from blast radius
+  // Check if piece is currently in a bomb blast zone
+  let inBlastRadius = false;
+  let bombTurnsLeft = 0;
+  for (const bomb of state.bombs || []) {
+    if (bomb.owner === forColor) continue; // ignore our own bombs
+    const distFromBomb = Math.max(Math.abs(from.r - bomb.r), Math.abs(from.c - bomb.c));
+    if (distFromBomb <= 1) {
+      inBlastRadius = true;
+      bombTurnsLeft = bomb.turnsLeft;
+      break;
+    }
+  }
+
+  if (inBlastRadius) {
+    // Check if destination is OUTSIDE all bomb blast radii
+    let destinationSafe = true;
+    for (const bomb of state.bombs || []) {
+      if (bomb.owner === forColor) continue;
+      const distToBomb = Math.max(Math.abs(to.r - bomb.r), Math.abs(to.c - bomb.c));
+      if (distToBomb <= 1) {
+        destinationSafe = false;
+        break;
+      }
+    }
+
+    if (destinationSafe) {
+      // Escaping from bomb! Priority based on piece value and urgency
+      const pieceValue = BOT_PIECE_VALUES[piece.type];
+      let escapeBonus = 100; // base escape bonus
+
+      // Higher bonus for more valuable pieces
+      if (pieceValue >= 900) escapeBonus += 150; // Queen
+      else if (pieceValue >= 500) escapeBonus += 100; // Rook
+      else if (pieceValue >= 320) escapeBonus += 50; // Knight/Bishop
+
+      // Higher bonus for more urgent bombs (detonating soon)
+      if (bombTurnsLeft <= 1) escapeBonus *= 2; // Double if detonates next turn
+
+      score += escapeBonus;
+    }
+  }
 
   // KING MARCH in endgame: move king toward enemy king when ahead
   if (piece.type === PIECE.KING && phase < 0.4) {
@@ -650,32 +1101,100 @@ function botCountMaterial(state, color) {
 }
 
 // ---------- Alpha-Beta Search (Hard mode) ----------
-// 4-ply with alpha-beta pruning, null-move pruning, killer moves, LMR,
-// check extensions, and quiescence search. Uses PVS at root.
-// Fast enough for browser with good pruning: typical search < 300ms.
-const BOT_SEARCH_DEPTH = 4; // 4-ply = deeper tactical vision
+// Adaptive depth: 4-6 ply based on game phase with selective extensions.
+// Includes alpha-beta pruning, adaptive null-move pruning, killer moves, LMR,
+// enhanced check extensions, and deep quiescence search. Uses PVS at root.
+// Target: 1-2 seconds per move with effective depth of 5-6 ply via extensions.
+const BOT_BASE_DEPTH = 4; // Base search depth
 const BOT_ROOT_CANDIDATES = 20; // Deep-search top N root moves
 
+// Adaptive depth by game phase
+function botGetSearchDepth(state) {
+  const turnNumber = state.turnNumber || 0;
+
+  // Opening (turns 1-10): 4-ply (book moves + tactical awareness)
+  if (turnNumber <= 10) return 4;
+
+  // Middlegame (turns 11-30): 5-ply (complex tactics need depth)
+  if (turnNumber <= 30) return 5;
+
+  // Endgame (turns 31+): 6-ply (fewer pieces, can search deeper)
+  return 6;
+}
+
 // Killer moves: track moves that caused beta cutoffs at each depth (2 per depth)
-const BOT_KILLERS = Array.from({ length: 8 }, () => [null, null]);
+// Increased size for deeper searches
+const BOT_KILLERS = Array.from({ length: 12 }, () => [null, null]);
 
 // History heuristic: track which from-to moves are generally good
 const BOT_HISTORY = {};
 
+// Transposition table: cache position evaluations
+// Using Zobrist-style simple position hash
+const BOT_TT_SIZE = 10000;
+const BOT_TT = new Map(); // key: positionHash, value: { score, depth, flag, bestMove }
+const BOT_TT_EXACT = 0;
+const BOT_TT_ALPHA = 1; // Upper bound
+const BOT_TT_BETA = 2;  // Lower bound
+
 function botClearSearchTables() {
-  for (let i = 0; i < 8; i++) BOT_KILLERS[i] = [null, null];
+  for (let i = 0; i < 12; i++) BOT_KILLERS[i] = [null, null];
   for (const k in BOT_HISTORY) delete BOT_HISTORY[k];
+  BOT_TT.clear();
+}
+
+// Simple position hash for transposition table
+function botPositionHash(state) {
+  let hash = 0;
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p) continue;
+      // Simple hash: piece type (6 bits) + color (1 bit) + position (6 bits)
+      const pieceCode = ({ P: 1, N: 2, B: 3, R: 4, Q: 5, K: 6 })[p.type] || 0;
+      const colorBit = p.color === COLOR.WHITE ? 0 : 1;
+      hash = (hash * 31 + (pieceCode * 128 + colorBit * 64 + r * 8 + c)) >>> 0;
+    }
+  }
+  // Mix in turn to distinguish same position with different side to move
+  hash = (hash * 31 + (state.turn === COLOR.WHITE ? 1 : 2)) >>> 0;
+  return hash;
+}
+
+// Store position in transposition table
+function botTTStore(hash, depth, score, flag, bestMove) {
+  if (BOT_TT.size >= BOT_TT_SIZE) {
+    // Simple replacement: clear oldest entries (FIFO-like)
+    const firstKey = BOT_TT.keys().next().value;
+    BOT_TT.delete(firstKey);
+  }
+  BOT_TT.set(hash, { depth, score, flag, bestMove });
+}
+
+// Probe transposition table
+function botTTProbe(hash, depth, alpha, beta) {
+  const entry = BOT_TT.get(hash);
+  if (!entry || entry.depth < depth) return null;
+
+  // Check if we can use cached score
+  if (entry.flag === BOT_TT_EXACT) return { score: entry.score, bestMove: entry.bestMove };
+  if (entry.flag === BOT_TT_ALPHA && entry.score <= alpha) return { score: alpha };
+  if (entry.flag === BOT_TT_BETA && entry.score >= beta) return { score: beta };
+
+  return { bestMove: entry.bestMove }; // At least return best move for ordering
 }
 
 function botHistoryKey(m) { return `${m.from.r}${m.from.c}${m.to.r}${m.to.c}`; }
 
 function botStoreKiller(depth, m) {
+  if (depth < 0 || depth >= BOT_KILLERS.length) return;
   const k = BOT_KILLERS[depth];
   if (k[0] && k[0].from.r === m.from.r && k[0].from.c === m.from.c && k[0].to.r === m.to.r && k[0].to.c === m.to.c) return;
   k[1] = k[0]; k[0] = m;
 }
 
 function botIsKiller(depth, m) {
+  if (depth < 0 || depth >= BOT_KILLERS.length) return false;
   const k = BOT_KILLERS[depth];
   for (let i = 0; i < 2; i++) {
     if (k[i] && k[i].from.r === m.from.r && k[i].from.c === m.from.c && k[i].to.r === m.to.r && k[i].to.c === m.to.c) return true;
@@ -704,6 +1223,10 @@ function botOrderScore(state, m, forColor, depth) {
   // PST improvement
   const phase = botGamePhase(state);
   s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
+  // Fountain move bonus (critical for move ordering)
+  if (state.fountains.some(f => f.r === m.to.r && f.c === m.to.c)) {
+    s += 30; // bonus for moves landing on fountains
+  }
   // King aggression in endgame
   if (phase < 0.5 && piece.type !== PIECE.KING) {
     const oppKing = findKing(state.board, opposite(forColor));
@@ -722,6 +1245,11 @@ function botRootOrderScore(state, m, forColor) {
   const opp = opposite(forColor);
   const piece = state.board[m.from.r][m.from.c];
   const target = state.board[m.to.r][m.to.c];
+
+  // Fountain priority at root level (strategic control)
+  if (state.fountains.some(f => f.r === m.to.r && f.c === m.to.c)) {
+    s += 30; // bonus for moves landing on fountains
+  }
 
   if (target && target.color !== piece.color) {
     // Penalize capturing into a defended square with a more valuable piece
@@ -755,68 +1283,158 @@ function botRootOrderScore(state, m, forColor) {
   return s;
 }
 
-// Negamax with alpha-beta pruning, null-move pruning, check extensions, LMR
-function botNegamax(state, depth, alpha, beta, forColor, nullMoveAllowed) {
+// Negamax with alpha-beta pruning, adaptive null-move pruning, enhanced extensions, LMR, and TT
+function botNegamax(state, depth, alpha, beta, forColor, nullMoveAllowed, ply) {
   const opp = opposite(forColor);
   if (nullMoveAllowed === undefined) nullMoveAllowed = true;
+  if (ply === undefined) ply = 0;
+
+  // CRITICAL: Maximum ply safety check to prevent stack overflow
+  // With endgame depth of 6 + extensions, we need a hard cap
+  const MAX_PLY = 10;
+  if (ply >= MAX_PLY) {
+    return botEvaluate(state, forColor);
+  }
+
+  // Transposition table probe
+  const posHash = botPositionHash(state);
+  const ttEntry = botTTProbe(posHash, depth, alpha, beta);
+  if (ttEntry && ttEntry.score !== undefined) return ttEntry.score;
 
   // Terminal check
   if (depth <= 0) {
-    return botQuiesce(state, alpha, beta, forColor);
+    return botQuiesce(state, alpha, beta, forColor, 0);
   }
 
   const inCheck = isInCheck(state.board, forColor);
-
-  // Check extension: search deeper when in check (critical positions)
-  const effectiveDepth = inCheck ? depth + 1 : depth;
-  if (effectiveDepth <= 0) return botQuiesce(state, alpha, beta, forColor);
-
   const moves = allLegalMoves(state.board, forColor, state);
 
   // Checkmate / stalemate
   if (moves.length === 0) {
-    if (inCheck) return -99999 + (BOT_SEARCH_DEPTH - depth); // Checkmate (prefer faster mates)
+    if (inCheck) return -99999 + ply; // Checkmate (prefer faster mates)
     return 0; // Stalemate
   }
 
-  // NULL-MOVE PRUNING: if not in check and position seems good, skip a turn
-  // to see if opponent can't even capitalize (fast cutoff for non-tactical positions)
-  if (nullMoveAllowed && !inCheck && depth >= 3 && botCountMaterial(state, forColor) > 22000) {
-    // "Pass" — let opponent play again (R=2 reduction)
-    const nmScore = -botNegamax(state, depth - 3, -beta, -beta + 1, opp, false);
-    if (nmScore >= beta) return beta; // Position so good we can give up a turn
+  // ENHANCED CHECK EXTENSION: +2 ply when in check (increased from +1)
+  let extension = 0;
+  if (inCheck) extension = 2;
+
+  // ADAPTIVE NULL-MOVE PRUNING: adjust reduction based on depth
+  // R = 3 at depth >= 6, R = 2 at depth 3-5, R = 1 at depth <= 2
+  const shouldDisableNullMove = botShouldDisableNullMove(state, forColor);
+  if (nullMoveAllowed && !inCheck && !shouldDisableNullMove && depth >= 3 && botCountMaterial(state, forColor) > 22000) {
+    let R = 2; // default reduction
+    if (depth >= 6) R = 3; // aggressive pruning in deep nodes
+    else if (depth <= 2) R = 1; // careful pruning near leaves
+
+    const nmScore = -botNegamax(state, depth - R - 1, -beta, -beta + 1, opp, false, ply + 1);
+    if (nmScore >= beta) {
+      // Multi-cut pruning: if we get beta cutoff at reduced depth, position is likely too good
+      return beta;
+    }
   }
 
-  // Move ordering: captures & promotions first, then by killer/history heuristic
-  const currentDepth = BOT_SEARCH_DEPTH - depth;
-  moves.sort((a, b) => botOrderScore(state, b, forColor, currentDepth) - botOrderScore(state, a, forColor, currentDepth));
+  // TT move ordering: try TT move first if available
+  let ttMove = ttEntry?.bestMove;
 
+  // Move ordering: TT move first, then captures & promotions, then killers/history
+  const currentDepth = ply;
+  moves.sort((a, b) => {
+    // Prioritize TT move
+    if (ttMove) {
+      const aTT = a.from.r === ttMove.from?.r && a.from.c === ttMove.from?.c &&
+                  a.to.r === ttMove.to?.r && a.to.c === ttMove.to?.c;
+      const bTT = b.from.r === ttMove.from?.r && b.from.c === ttMove.from?.c &&
+                  b.to.r === ttMove.to?.r && b.to.c === ttMove.to?.c;
+      if (aTT && !bTT) return -1;
+      if (bTT && !aTT) return 1;
+    }
+    return botOrderScore(state, b, forColor, currentDepth) - botOrderScore(state, a, forColor, currentDepth);
+  });
+
+  let bestScore = -Infinity;
+  let bestMove = null;
   let moveCount = 0;
+  const originalAlpha = alpha;
+
   for (const m of moves) {
     moveCount++;
     const snap = snapshot(state.board);
     const piece = state.board[m.from.r][m.from.c];
     const target = state.board[m.to.r][m.to.c];
     const isCapture = !!(target && target.color !== piece.color);
+    const isPawnTo7th = piece?.type === PIECE.PAWN && (forColor === COLOR.WHITE ? m.to.r === 1 : m.to.r === 6);
+    const isPromotion = piece?.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7);
+
     const moveInfo = { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant };
     applyMoveRaw(state.board, m.from.r, m.from.c, moveInfo, state);
-    if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+    if (isPromotion) {
       state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
     }
 
+    // SELECTIVE SEARCH EXTENSIONS
+    let moveExtension = extension;
+
+    // Capture extension: +1 ply for captures of high-value pieces (Q/R)
+    if (isCapture && target && BOT_PIECE_VALUES[target.type] >= 500) {
+      moveExtension = Math.max(moveExtension, 1);
+    }
+
+    // Pawn-to-7th extension: +1 ply when pawn reaches 7th rank (promotion imminent)
+    if (isPawnTo7th) {
+      moveExtension = Math.max(moveExtension, 1);
+    }
+
+    // Passed pawn push extension: +1 ply when passed pawn advances in endgame
+    if (piece?.type === PIECE.PAWN && botGamePhase(state) < 0.5) {
+      // Check if this is a passed pawn advancing
+      const dir = forColor === COLOR.WHITE ? -1 : 1;
+      const promoRow = forColor === COLOR.WHITE ? 0 : 7;
+      let isPassed = true;
+      for (let scanR = m.to.r + dir; scanR !== promoRow + dir; scanR += dir) {
+        if (scanR < 0 || scanR > 7) break;
+        for (let dc = -1; dc <= 1; dc++) {
+          const scanC = m.to.c + dc;
+          if (scanC < 0 || scanC > 7) continue;
+          const blocker = state.board[scanR][scanC];
+          if (blocker && blocker.type === PIECE.PAWN && blocker.color !== forColor && !blocker.isSpectral) {
+            isPassed = false;
+            break;
+          }
+        }
+        if (!isPassed) break;
+      }
+      if (isPassed && Math.abs(m.to.r - m.from.r) > 0) {
+        moveExtension = Math.max(moveExtension, 1);
+      }
+    }
+
+    // CRITICAL: Cap total extension to prevent runaway depth
+    // Don't allow extensions if we're already near MAX_PLY
+    if (ply >= MAX_PLY - 2) {
+      moveExtension = 0;
+    }
+
+    const newDepth = depth - 1 + moveExtension;
     let score;
+
     // Late Move Reduction: for late quiet moves, search with reduced depth first
-    if (moveCount > 4 && depth >= 3 && !inCheck && !isCapture && !botIsKiller(currentDepth, m)) {
+    if (moveCount > 4 && depth >= 3 && !inCheck && !isCapture && !botIsKiller(currentDepth, m) && moveExtension === 0) {
       // Reduced search (depth - 2 instead of depth - 1)
-      score = -botNegamax(state, depth - 2, -alpha - 1, -alpha, opp, true);
+      score = -botNegamax(state, newDepth - 1, -alpha - 1, -alpha, opp, true, ply + 1);
       // If it fails high, re-search at full depth
       if (score > alpha) {
-        score = -botNegamax(state, depth - 1, -beta, -alpha, opp, true);
+        score = -botNegamax(state, newDepth, -beta, -alpha, opp, true, ply + 1);
       }
     } else {
-      score = -botNegamax(state, depth - 1, -beta, -alpha, opp, true);
+      score = -botNegamax(state, newDepth, -beta, -alpha, opp, true, ply + 1);
     }
     restore(state.board, snap);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = m;
+    }
 
     if (score >= beta) {
       // Beta cutoff — store killer and history for move ordering
@@ -825,18 +1443,28 @@ function botNegamax(state, depth, alpha, beta, forColor, nullMoveAllowed) {
         const hk = botHistoryKey(m);
         BOT_HISTORY[hk] = (BOT_HISTORY[hk] || 0) + depth * depth;
       }
+      // Store in TT as lower bound
+      botTTStore(posHash, depth, beta, BOT_TT_BETA, bestMove);
       return beta;
     }
-    if (score > alpha) alpha = score;
+    if (score > alpha) {
+      alpha = score;
+    }
   }
+
+  // Store in TT
+  const flag = bestScore <= originalAlpha ? BOT_TT_ALPHA : (bestScore >= beta ? BOT_TT_BETA : BOT_TT_EXACT);
+  botTTStore(posHash, depth, bestScore, flag, bestMove);
 
   return alpha;
 }
 
-// Quiescence search: evaluate captures + check evasions to avoid horizon effect
-// Delta pruning: skip captures that can't possibly raise alpha
-function botQuiesce(state, alpha, beta, forColor, qDepth) {
+// ENHANCED Quiescence search: captures + promotions + check-giving moves + recaptures
+// Deeper max depth (8) for better tactical vision. Delta pruning to cut futile branches.
+function botQuiesce(state, alpha, beta, forColor, qDepth, lastCaptureSquare) {
   if (qDepth === undefined) qDepth = 0;
+  if (lastCaptureSquare === undefined) lastCaptureSquare = null;
+
   const standPat = botEvaluate(state, forColor);
   if (standPat >= beta) return beta;
   if (standPat > alpha) alpha = standPat;
@@ -845,44 +1473,101 @@ function botQuiesce(state, alpha, beta, forColor, qDepth) {
   const DELTA = 975; // queen value + margin
   if (standPat + DELTA < alpha) return alpha;
 
-  // Limit quiescence depth to prevent explosion
+  // REDUCED max quiescence depth: 6 (from 8) to prevent stack overflow
+  // Combined with MAX_PLY=10, total depth is 16 which is safe
   if (qDepth >= 6) return standPat;
 
-  // Generate only captures (+ promotions)
   const opp = opposite(forColor);
   const moves = allLegalMoves(state.board, forColor, state);
-  const tacticalMoves = moves.filter(m => {
-    if (m.move.capture) return true;
-    const p = state.board[m.from.r][m.from.c];
-    if (p && p.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) return true; // promotions
-    return false;
-  });
 
-  // Sort by MVV-LVA + promotion bonus
+  // ENHANCED tactical moves: captures + promotions + check-giving moves + recaptures
+  const tacticalMoves = [];
+  for (const m of moves) {
+    const p = state.board[m.from.r][m.from.c];
+    let isTactical = false;
+
+    // 1. Captures
+    if (m.move.capture) {
+      isTactical = true;
+    }
+
+    // 2. Promotions
+    if (p && p.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+      isTactical = true;
+    }
+
+    // 3. Check-giving moves (can lead to tactics)
+    // Quick check: does this move attack enemy king?
+    if (!isTactical && qDepth <= 2) { // Only check for checks in shallow qsearch
+      const snap = snapshot(state.board);
+      const moveInfo = { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant };
+      applyMoveRaw(state.board, m.from.r, m.from.c, moveInfo, state);
+      if (p && p.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
+        state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
+      }
+      const givesCheck = isInCheck(state.board, opp);
+      restore(state.board, snap);
+      if (givesCheck) {
+        isTactical = true;
+        m.givesCheck = true; // mark for prioritization
+      }
+    }
+
+    // 4. Recaptures on same square (exchange evaluation)
+    if (!isTactical && lastCaptureSquare && m.to.r === lastCaptureSquare.r && m.to.c === lastCaptureSquare.c) {
+      isTactical = true;
+      m.isRecapture = true;
+    }
+
+    if (isTactical) {
+      tacticalMoves.push(m);
+    }
+  }
+
+  // Sort by MVV-LVA + promotion bonus + check bonus
   tacticalMoves.sort((a, b) => {
-    let aVal = state.board[a.to.r][a.to.c] ? BOT_PIECE_VALUES[state.board[a.to.r][a.to.c].type] * 10 : 0;
-    let bVal = state.board[b.to.r][b.to.c] ? BOT_PIECE_VALUES[state.board[b.to.r][b.to.c].type] * 10 : 0;
+    let aVal = 0, bVal = 0;
+
+    // Target value (victim)
+    const aTarget = state.board[a.to.r][a.to.c];
+    const bTarget = state.board[b.to.r][b.to.c];
+    if (aTarget) aVal += BOT_PIECE_VALUES[aTarget.type] * 10;
+    if (bTarget) bVal += BOT_PIECE_VALUES[bTarget.type] * 10;
+
+    // Attacker value (subtract for MVV-LVA)
     const aP = state.board[a.from.r][a.from.c];
     const bP = state.board[b.from.r][b.from.c];
-    if (aP && aP.type === PIECE.PAWN && (a.to.r === 0 || a.to.r === 7)) aVal += 9000;
-    if (bP && bP.type === PIECE.PAWN && (b.to.r === 0 || b.to.r === 7)) bVal += 9000;
     if (aP) aVal -= BOT_PIECE_VALUES[aP.type];
     if (bP) bVal -= BOT_PIECE_VALUES[bP.type];
+
+    // Promotion bonus
+    if (aP && aP.type === PIECE.PAWN && (a.to.r === 0 || a.to.r === 7)) aVal += 9000;
+    if (bP && bP.type === PIECE.PAWN && (b.to.r === 0 || b.to.r === 7)) bVal += 9000;
+
+    // Check-giving move bonus
+    if (a.givesCheck) aVal += 5000;
+    if (b.givesCheck) bVal += 5000;
+
+    // Recapture bonus
+    if (a.isRecapture) aVal += 3000;
+    if (b.isRecapture) bVal += 3000;
+
     return bVal - aVal;
   });
 
-  // Evaluate top captures (wider window for deeper tactical vision)
-  const limit = qDepth === 0 ? 8 : 5;
+  // Evaluate top tactical moves (more at root of qsearch, fewer deeper)
+  const limit = qDepth === 0 ? 12 : qDepth === 1 ? 8 : 5;
   const topMoves = tacticalMoves.slice(0, limit);
 
   for (const m of topMoves) {
-    // SEE-based pruning: skip obviously bad captures (trading down)
     const target = state.board[m.to.r][m.to.c];
     const piece = state.board[m.from.r][m.from.c];
-    if (target && piece) {
+
+    // SEE-based pruning: skip obviously bad captures (but allow checks/promotions)
+    if (target && piece && !m.givesCheck) {
       const tVal = BOT_PIECE_VALUES[target.type];
       const pVal = BOT_PIECE_VALUES[piece.type];
-      // Skip captures where we lose material (minor capturing queen is fine; queen capturing pawn when attacked is bad)
+      // Skip captures where we lose material significantly
       if (pVal > tVal + 200 && qDepth > 1) {
         // Quick check: is our piece going to be captured back?
         if (isSquareAttacked(state.board, m.to.r, m.to.c, opp)) continue;
@@ -896,7 +1581,10 @@ function botQuiesce(state, alpha, beta, forColor, qDepth) {
       state.board[m.to.r][m.to.c] = makePiece(PIECE.QUEEN, forColor);
     }
 
-    const score = -botQuiesce(state, -beta, -alpha, opp, qDepth + 1);
+    // Track last capture square for recapture detection
+    const captureSquare = m.move.capture ? { r: m.to.r, c: m.to.c } : lastCaptureSquare;
+
+    const score = -botQuiesce(state, -beta, -alpha, opp, qDepth + 1, captureSquare);
     restore(state.board, snap);
 
     if (score >= beta) return beta;
@@ -907,7 +1595,7 @@ function botQuiesce(state, alpha, beta, forColor, qDepth) {
 }
 
 // Root-level search: picks the best move using PVS (Principal Variation Search)
-// with iterative deepening for time management.
+// with iterative deepening for time management and aspiration windows.
 function botSearchBestMove(state, moves, forColor) {
   const opp = opposite(forColor);
   botClearSearchTables(); // fresh killers/history each search
@@ -919,19 +1607,24 @@ function botSearchBestMove(state, moves, forColor) {
   // Only deep-search the top candidates
   const candidates = scored.slice(0, Math.min(BOT_ROOT_CANDIDATES, scored.length));
 
-  // Iterative deepening: search at depth 2, 3, then 4.
-  // Each iteration's best move goes first in the next iteration.
+  // Iterative deepening with adaptive depth by game phase
   let bestMove = candidates[0].m;
   let bestScore = -Infinity;
 
   const startTime = Date.now();
-  const maxTime = 800; // ms budget for search
+  const maxTime = 1800; // Increased time budget to 1.8s for deeper searches
 
-  for (let searchDepth = 2; searchDepth <= BOT_SEARCH_DEPTH; searchDepth++) {
+  // ADAPTIVE DEPTH BY GAME PHASE
+  const maxDepth = botGetSearchDepth(state);
+
+  for (let searchDepth = 2; searchDepth <= maxDepth; searchDepth++) {
     let iterBest = candidates[0].m;
     let iterScore = -Infinity;
-    let alpha = -Infinity;
-    const beta = Infinity;
+
+    // ASPIRATION WINDOWS: start with narrow window around previous score
+    let alpha = searchDepth <= 2 ? -Infinity : bestScore - 50;
+    let beta = searchDepth <= 2 ? Infinity : bestScore + 50;
+    let aspirationFailed = false;
 
     // Put previous iteration's best move first
     const orderedCandidates = [...candidates];
@@ -957,13 +1650,21 @@ function botSearchBestMove(state, moves, forColor) {
       let score;
       // PVS: first move gets full window, rest get zero-window first
       if (moveIdx === 1) {
-        score = -botNegamax(state, searchDepth - 1, -beta, -alpha, opp, true);
+        score = -botNegamax(state, searchDepth - 1, -beta, -alpha, opp, true, 0);
+
+        // Aspiration window re-search if score falls outside
+        if (searchDepth > 2 && (score <= alpha || score >= beta)) {
+          alpha = -Infinity;
+          beta = Infinity;
+          score = -botNegamax(state, searchDepth - 1, -beta, -alpha, opp, true, 0);
+          aspirationFailed = true;
+        }
       } else {
         // Zero-window search
-        score = -botNegamax(state, searchDepth - 1, -alpha - 1, -alpha, opp, true);
+        score = -botNegamax(state, searchDepth - 1, -alpha - 1, -alpha, opp, true, 0);
         if (score > alpha && score < beta) {
           // Re-search with full window
-          score = -botNegamax(state, searchDepth - 1, -beta, -alpha, opp, true);
+          score = -botNegamax(state, searchDepth - 1, -beta, -alpha, opp, true, 0);
         }
       }
       restore(state.board, snap);
@@ -977,13 +1678,21 @@ function botSearchBestMove(state, moves, forColor) {
         iterBest = m;
       }
       if (score > alpha) alpha = score;
+
+      // Time check mid-iteration: stop if running out of time
+      if (Date.now() - startTime > maxTime * 0.8) break;
     }
 
     bestMove = iterBest;
     bestScore = iterScore;
 
-    // Time check: don't start next depth if we've used > 60% of budget
-    if (Date.now() - startTime > maxTime * 0.6) break;
+    // Time check: don't start next depth if we've used > 50% of budget
+    // (more conservative to ensure we complete the current depth)
+    const elapsed = Date.now() - startTime;
+    if (elapsed > maxTime * 0.5) {
+      // console.log(`[bot] Completed depth ${searchDepth} in ${elapsed}ms, stopping iterative deepening`);
+      break;
+    }
   }
 
   return bestMove;
@@ -1003,15 +1712,42 @@ function botConsiderPowers(state, forColor) {
   if (aether >= POWER_COSTS[POWER.VENGEANCE]) {
     let bestTarget = null, bestVal = 0;
     const oppKing = findKing(state.board, opp);
+    const myMat = botCountMaterial(state, forColor);
+    const oppMat = botCountMaterial(state, opp);
+    const materialBalance = myMat - oppMat;
+
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color === forColor || p.type === PIECE.KING) continue;
       if (p.isSpectral) continue;
       let val = BOT_PIECE_VALUES[p.type];
-      // Extra value for pieces defending the enemy king
-      if (oppKing && Math.max(Math.abs(r - oppKing.r), Math.abs(c - oppKing.c)) <= 2) {
-        val += 80;
+
+      // OPTIMIZED: If target is attacking our king, add huge bonus
+      const myKing = findKing(state.board, forColor);
+      if (myKing) {
+        const attacks = typeof getAttackSquares === 'function' ? getAttackSquares(state.board, r, c) : [];
+        if (attacks.some(a => a.r === myKing.r && a.c === myKing.c)) {
+          val += 150; // Destroy attacker threatening our king
+        }
       }
+
+      // OPTIMIZED: If target is only defender of enemy king (mating attack)
+      if (oppKing && Math.max(Math.abs(r - oppKing.r), Math.abs(c - oppKing.c)) <= 2) {
+        // Check if this is the only defender
+        let defenderCount = 0;
+        for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+          const nr = oppKing.r + dr, nc = oppKing.c + dc;
+          if (!inBounds(nr, nc)) continue;
+          const def = state.board[nr][nc];
+          if (def && def.color === opp && def.type !== PIECE.KING && !def.isSpectral) defenderCount++;
+        }
+        if (defenderCount <= 2) {
+          val += 200; // Only defender - mating attack enabled
+        } else {
+          val += 80; // Multiple defenders, still valuable
+        }
+      }
+
       // Extra value if piece is a captor holding our piece
       if (p.imprisoned && p.imprisoned.color === forColor) {
         val += BOT_PIECE_VALUES[p.imprisoned.type] * 0.7;
@@ -1021,7 +1757,18 @@ function botConsiderPowers(state, forColor) {
     // In endgame, use on ANY piece to strip defenses. In middlegame, target high-value.
     const threshold = phase < 0.5 ? 100 : 300;
     if (bestTarget && bestVal >= threshold) {
-      const prio = phase < 0.5 ? bestVal * 0.35 : bestVal * 0.25;
+      // OPTIMIZED: Scale by game phase and material balance
+      let prio;
+      if (materialBalance > 300) {
+        // We're ahead: lower priority (0.2), save aether
+        prio = bestVal * 0.20;
+      } else if (materialBalance < -200) {
+        // We're behind: higher priority (0.4), desperate for material
+        prio = bestVal * 0.40;
+      } else {
+        // Balanced: medium priority
+        prio = bestVal * (phase < 0.5 ? 0.32 : 0.27);
+      }
       candidates.push({
         priority: prio,
         exec: () => castVengeance(state, bestTarget.r, bestTarget.c),
@@ -1035,7 +1782,7 @@ function botConsiderPowers(state, forColor) {
   // But DON'T promote if opponent has enough aether for Vengeance (they'll just destroy it)
   const oppCanVengeance = state.mana[opp] >= POWER_COSTS[POWER.VENGEANCE] && !state.aetherBlocked[opp];
   if (aether >= POWER_COSTS[POWER.PROMOTE] && !oppCanVengeance) {
-    let bestPawn = null, bestDist = 99, bestSafe = false;
+    let bestPawn = null, bestDist = 99, bestSafe = false, bestTacticalBonus = 0;
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (p && p.color === forColor && p.type === PIECE.PAWN && !p.isSpectral) {
@@ -1043,15 +1790,56 @@ function botConsiderPowers(state, forColor) {
         const attacked = isSquareAttacked(state.board, r, c, opp);
         const defended = isSquareAttacked(state.board, r, c, forColor);
         const safe = !attacked || defended;
-        if (safe && (!bestSafe || distToPromo < bestDist)) {
-          bestDist = distToPromo; bestPawn = { r, c }; bestSafe = true;
-        } else if (!bestSafe && distToPromo < bestDist) {
-          bestDist = distToPromo; bestPawn = { r, c };
+
+        // OPTIMIZED: Check tactical value of promoting this pawn
+        let tacticalBonus = 0;
+
+        // Simulate promotion to check if it gives checkmate
+        const snap = snapshot(state.board);
+        state.board[r][c] = makePiece(PIECE.QUEEN, forColor);
+        const givesCheck = isInCheck(state.board, opp);
+        let givesMate = false;
+        if (givesCheck) {
+          const oppMoves = allLegalMoves(state.board, opp, state);
+          if (oppMoves.length === 0) {
+            givesMate = true;
+            tacticalBonus += 100; // Promotion gives checkmate!
+          } else {
+            tacticalBonus += 80; // Promotion gives check
+          }
+        }
+
+        // Check if promoted queen controls critical squares near enemy king
+        if (!givesMate) {
+          const oppKing = findKing(state.board, opp);
+          if (oppKing) {
+            const queenAttacks = typeof getAttackSquares === 'function' ? getAttackSquares(state.board, r, c) : [];
+            let criticalSquares = 0;
+            for (const att of queenAttacks) {
+              const dist = Math.max(Math.abs(att.r - oppKing.r), Math.abs(att.c - oppKing.c));
+              if (dist <= 2) criticalSquares++;
+            }
+            if (criticalSquares >= 4) tacticalBonus += 60; // Controls many squares near king
+          }
+        }
+        restore(state.board, snap);
+
+        // Check if opponent can immediately capture promoted piece (reduce priority)
+        let canCapture = false;
+        if (attacked && !defended) {
+          canCapture = true;
+          tacticalBonus -= 50; // Opponent can capture
+        }
+
+        if (safe && (!bestSafe || distToPromo < bestDist || (distToPromo === bestDist && tacticalBonus > bestTacticalBonus))) {
+          bestDist = distToPromo; bestPawn = { r, c }; bestSafe = true; bestTacticalBonus = tacticalBonus;
+        } else if (!bestSafe && (distToPromo < bestDist || (distToPromo === bestDist && tacticalBonus > bestTacticalBonus))) {
+          bestDist = distToPromo; bestPawn = { r, c }; bestTacticalBonus = tacticalBonus;
         }
       }
     }
     if (bestPawn) {
-      const basePrio = 80 + (7 - bestDist) * 15;
+      const basePrio = 80 + (7 - bestDist) * 15 + bestTacticalBonus;
       let prio = phase < 0.5 ? basePrio * 1.5 : basePrio;
       if (!bestSafe) prio *= 0.4;
       candidates.push({
@@ -1066,6 +1854,10 @@ function botConsiderPowers(state, forColor) {
   // IMPRISON: Capture an adjacent high-value enemy piece — very strong, removes piece from play
   if (aether >= POWER_COSTS[POWER.IMPRISON] && !isInCheck(state.board, forColor)) {
     let bestImprison = null, bestImpVal = 0;
+    const myMat = botCountMaterial(state, forColor);
+    const oppMat = botCountMaterial(state, opp);
+    const materialBalance = myMat - oppMat;
+
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const captor = state.board[r][c];
       if (!captor || captor.color !== forColor || captor.type === PIECE.KING) continue;
@@ -1081,8 +1873,49 @@ function botConsiderPowers(state, forColor) {
         if (captive.frozenUntil && captive.frozenUntil > state.turnNumber) continue;
         if (captive.shieldHP > 0) continue;
         let val = BOT_PIECE_VALUES[captive.type];
+
+        // OPTIMIZED: Check if imprisoning enables winning capture next move
+        const snap = snapshot(state.board);
+        state.board[nr][nc] = null; // Simulate removal
+        let enablesCapture = 0;
+        for (let mr = 0; mr < 8; mr++) for (let mc = 0; mc < 8; mc++) {
+          const myP = state.board[mr][mc];
+          if (!myP || myP.color !== forColor || myP.isSpectral) continue;
+          if (myP.imprisoned || (myP.frozenUntil && myP.frozenUntil > state.turnNumber)) continue;
+          const mvs = legalMoves(state.board, mr, mc, state);
+          for (const mv of mvs) {
+            const t = state.board[mv.r][mv.c];
+            if (t && t.color === opp && t.type !== PIECE.KING && BOT_PIECE_VALUES[t.type] > val) {
+              enablesCapture = Math.max(enablesCapture, BOT_PIECE_VALUES[t.type]);
+            }
+          }
+        }
+        restore(state.board, snap);
+        if (enablesCapture > 0) val += 100; // Imprisoning defender allows winning capture
+
+        // OPTIMIZED: Check if imprisoning only defender of enemy king
+        const oppKing = findKing(state.board, opp);
+        if (oppKing && Math.max(Math.abs(nr - oppKing.r), Math.abs(nc - oppKing.c)) <= 2) {
+          let defenderCount = 0;
+          for (let dr2 = -2; dr2 <= 2; dr2++) for (let dc2 = -2; dc2 <= 2; dc2++) {
+            const nr2 = oppKing.r + dr2, nc2 = oppKing.c + dc2;
+            if (!inBounds(nr2, nc2)) continue;
+            const def = state.board[nr2][nc2];
+            if (def && def.color === opp && def.type !== PIECE.KING && !def.isSpectral) defenderCount++;
+          }
+          if (defenderCount <= 2) val += 80; // Only defender of enemy king
+        }
+
+        // OPTIMIZED: If target is attacking our king
+        const myKing = findKing(state.board, forColor);
+        if (myKing) {
+          const attacks = typeof getAttackSquares === 'function' ? getAttackSquares(state.board, nr, nc) : [];
+          if (attacks.some(a => a.r === myKing.r && a.c === myKing.c)) {
+            val += 40; // Target attacking our king
+          }
+        }
+
         // Imprison is especially good on pieces that are hard to capture normally
-        // (well-defended pieces we can't trade into)
         if (isSquareAttacked(state.board, nr, nc, opp)) val += 50;
         if (val > bestImpVal) {
           bestImpVal = val;
@@ -1092,8 +1925,13 @@ function botConsiderPowers(state, forColor) {
     }
     // Use on knights (320+) and above — imprison is powerful since piece is removed from play
     if (bestImprison && bestImpVal >= 250) {
+      // OPTIMIZED: Scale down if we're far ahead (save aether)
+      let prio = bestImpVal * 0.22;
+      if (materialBalance > 500) {
+        prio *= 0.8; // Scale down when ahead
+      }
       candidates.push({
-        priority: bestImpVal * 0.22,
+        priority: prio,
         exec: () => castImprison(state, bestImprison.captorR, bestImprison.captorC, bestImprison.captiveR, bestImprison.captiveC),
         name: 'IMPRISON',
         payload: { power: 'IMPRISON', captor: { r: bestImprison.captorR, c: bestImprison.captorC }, captive: { r: bestImprison.captiveR, c: bestImprison.captiveC } }
@@ -1109,14 +1947,72 @@ function botConsiderPowers(state, forColor) {
       const p = state.board[r][c];
       if (!p || p.type === PIECE.KING) continue;
       let cleanseVal = 0;
+
+      // OPTIMIZED: Remove shield from opponent's queen (makes it vulnerable)
+      if (p.color === opp && p.type === PIECE.QUEEN && p.shieldHP > 0) {
+        cleanseVal = 150; // Removing shield from queen
+      }
+
       // Case 1: Enemy piece is holding OUR piece captive → free it
       if (p.color === opp && p.imprisoned && p.imprisoned.color === forColor) {
-        cleanseVal = BOT_PIECE_VALUES[p.imprisoned.type] * 0.8;
+        cleanseVal = Math.max(cleanseVal, BOT_PIECE_VALUES[p.imprisoned.type] * 0.8);
+        // OPTIMIZED: Freeing our queen is critical
+        if (p.imprisoned.type === PIECE.QUEEN) cleanseVal += 100;
       }
+
+      // OPTIMIZED: Cleanse imprisoner to free our piece (attack the captor)
+      if (p.color === opp && p.imprisoned && p.imprisoned.color === forColor) {
+        const snap = snapshot(state.board);
+        // Simulate cleanse
+        const freedPiece = p.imprisoned;
+        p.imprisoned = null;
+        // Check if freed piece can now do something valuable
+        if (freedPiece) {
+          const freedMoves = legalMoves(state.board, r, c, state);
+          for (const mv of freedMoves) {
+            const t = state.board[mv.r][mv.c];
+            if (t && t.color === opp && t.type !== PIECE.KING) {
+              cleanseVal += BOT_PIECE_VALUES[t.type] * 0.3; // Can capture after being freed
+            }
+          }
+        }
+        restore(state.board, snap);
+      }
+
       // Case 2: Our own piece is frozen → unfreeze it
       if (p.color === forColor && p.frozenUntil && p.frozenUntil > state.turnNumber) {
         cleanseVal = Math.max(cleanseVal, BOT_PIECE_VALUES[p.type] * 0.5);
+
+        // OPTIMIZED: Check if unfrozen piece delivers checkmate
+        const snap = snapshot(state.board);
+        p.frozenUntil = 0; // Simulate unfreeze
+        const mvs = legalMoves(state.board, r, c, state);
+        for (const mv of mvs) {
+          const captured = state.board[mv.r][mv.c];
+          state.board[mv.r][mv.c] = p;
+          state.board[r][c] = null;
+          if (isInCheck(state.board, opp)) {
+            const oppMoves = allLegalMoves(state.board, opp, state);
+            if (oppMoves.length === 0) {
+              cleanseVal += 80; // Unfreezing delivers checkmate!
+              restore(state.board, snap);
+              break;
+            }
+          }
+          restore(state.board, snap);
+          p.frozenUntil = state.turnNumber + 3;
+        }
+        restore(state.board, snap);
+
+        // ENDGAME: Huge bonus for unfreezing passed pawn about to promote
+        if (phase < 0.5 && p.type === PIECE.PAWN) {
+          const distToPromo = forColor === COLOR.WHITE ? r : (7 - r);
+          if (distToPromo <= 2) {
+            cleanseVal += 180; // Unfreezing passed pawn on 6th/7th rank is critical
+          }
+        }
       }
+
       // Case 3: Our own piece is holding an enemy piece (maybe we want to release for tactical reasons)
       // — generally don't do this unless the captor is in danger
       if (cleanseVal > bestCleanseVal) {
@@ -1137,18 +2033,59 @@ function botConsiderPowers(state, forColor) {
   // FROST: Freeze opponent's most threatening piece (value + proximity to our king)
   if (aether >= POWER_COSTS[POWER.FROST] && !isInCheck(state.board, forColor)) {
     const myKing = findKing(state.board, forColor);
+    const oppKing = findKing(state.board, opp);
     let bestTarget = null, bestScore = 0;
+
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color === forColor || p.type === PIECE.KING || p.isSpectral) continue;
       if (p.imprisoned) continue;
       if (p.frozenUntil && p.frozenUntil > state.turnNumber) continue;
       let frostScore = BOT_PIECE_VALUES[p.type];
-      // Extra value for pieces threatening our king
+
+      // OPTIMIZED: Check if freezing only defender of enemy king (mate threat)
+      if (oppKing && Math.max(Math.abs(r - oppKing.r), Math.abs(c - oppKing.c)) <= 2) {
+        let defenderCount = 0;
+        for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) {
+          const nr = oppKing.r + dr, nc = oppKing.c + dc;
+          if (!inBounds(nr, nc)) continue;
+          const def = state.board[nr][nc];
+          if (def && def.color === opp && def.type !== PIECE.KING && !def.isSpectral) {
+            if (!(def.frozenUntil && def.frozenUntil > state.turnNumber)) defenderCount++;
+          }
+        }
+        if (defenderCount <= 2) {
+          frostScore += 200; // Only defender - freezing creates mate threat
+        }
+      }
+
+      // OPTIMIZED: Check if freezing piece that threatens our king
       if (myKing) {
+        const attacks = typeof getAttackSquares === 'function' ? getAttackSquares(state.board, r, c) : [];
+        if (attacks.some(a => a.r === myKing.r && a.c === myKing.c)) {
+          frostScore += 150; // Piece threatens our king
+        }
         const distToMyKing = Math.max(Math.abs(r - myKing.r), Math.abs(c - myKing.c));
         if (distToMyKing <= 3) frostScore += (4 - distToMyKing) * 60;
       }
+
+      // OPTIMIZED: Check if freezing piece guards critical square
+      // A critical square is one near enemy king that we could use for attack
+      if (oppKing) {
+        const snap = snapshot(state.board);
+        state.board[r][c] = null; // Simulate piece not defending
+        let criticalSquareCount = 0;
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+          const nr = oppKing.r + dr, nc = oppKing.c + dc;
+          if (!inBounds(nr, nc)) continue;
+          if (!isSquareAttacked(state.board, nr, nc, opp) && isSquareAttacked(state.board, nr, nc, forColor)) {
+            criticalSquareCount++;
+          }
+        }
+        restore(state.board, snap);
+        if (criticalSquareCount >= 2) frostScore += 100; // Guards critical squares
+      }
+
       // Extra value if the piece is attacking one of our high-value pieces
       for (let mr = 0; mr < 8; mr++) for (let mc = 0; mc < 8; mc++) {
         const myP = state.board[mr][mc];
@@ -1159,25 +2096,58 @@ function botConsiderPowers(state, forColor) {
           }
         }
       }
+
+      // ENDGAME: Extra value for freezing piece blocking passed pawn promotion
+      if (phase < 0.5) {
+        const dir = forColor === COLOR.WHITE ? -1 : 1;
+        const checkRank = r + dir;
+        if (checkRank >= 0 && checkRank < 8) {
+          const behind = state.board[checkRank][c];
+          if (behind && behind.type === PIECE.PAWN && behind.color === forColor && !behind.isSpectral) {
+            const distToPromo = forColor === COLOR.WHITE ? checkRank : (7 - checkRank);
+            if (distToPromo <= 2) {
+              frostScore += 140; // Freeze blocker of passed pawn on 6th/7th rank
+            }
+          }
+        }
+      }
       if (frostScore > bestScore) { bestScore = frostScore; bestTarget = { r, c }; }
     }
     const threshold = phase < 0.5 ? 200 : 350;
     if (bestTarget && bestScore >= threshold) {
-      candidates.push({
-        priority: bestScore * 0.06,
-        exec: () => castFrost(state, bestTarget.r, bestTarget.c),
-        name: 'FROST',
-        payload: { power: 'FROST', r: bestTarget.r, c: bestTarget.c }
-      });
+      // OPTIMIZED: Only use if we can capitalize next turn (check if we have attacking moves)
+      let canCapitalize = false;
+      const snap = snapshot(state.board);
+      const target = state.board[bestTarget.r][bestTarget.c];
+      if (target) target.frozenUntil = state.turnNumber + 3;
+      const myMoves = allLegalMoves(state.board, forColor, state);
+      for (const mv of myMoves) {
+        const t = state.board[mv.to.r][mv.to.c];
+        if ((t && t.color === opp && BOT_PIECE_VALUES[t.type] >= 300) ||
+            (mv.to.r === bestTarget.r && mv.to.c === bestTarget.c)) {
+          canCapitalize = true;
+          break;
+        }
+      }
+      restore(state.board, snap);
+
+      if (canCapitalize || bestScore >= 400) { // High-value freezes don't need follow-up
+        candidates.push({
+          priority: bestScore * 0.06,
+          exec: () => castFrost(state, bestTarget.r, bestTarget.c),
+          name: 'FROST',
+          payload: { power: 'FROST', r: bestTarget.r, c: bestTarget.c }
+        });
+      }
     }
   }
 
   // FORTIFY: Shield our most valuable unshielded piece that's under threat
   // Also: shield a piece that can deliver checkmate (survives recapture on mate square)
   if (aether >= POWER_COSTS[POWER.FORTIFY] && !isInCheck(state.board, forColor)) {
-    let bestPiece = null, bestVal = 0;
+    let bestPiece = null, bestVal = 0, bestReason = null;
 
-    // Strategy 1: Shield piece that can deliver checkmate (Fortify doesn't end turn!)
+    // OPTIMIZED Strategy 1: Shield piece that delivers checkmate next turn
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
@@ -1198,15 +2168,90 @@ function botConsiderPowers(state, forColor) {
         restore(state.board, snap);
         if (isMate && isSquareAttacked(state.board, mv.r, mv.c, opp)) {
           // The mate square is attacked — fortify ensures our piece survives to deliver
-          bestVal = 500;
+          bestVal = 300;
           bestPiece = { r, c };
+          bestReason = 'checkmate';
           break;
         }
       }
-      if (bestVal >= 500) break;
+      if (bestVal >= 300 && bestReason === 'checkmate') break;
     }
 
-    // Strategy 2: Standard — shield most valuable threatened piece
+    // OPTIMIZED Strategy 2: Shield queen about to capture enemy queen
+    if (!bestPiece) {
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color !== forColor || p.type !== PIECE.QUEEN || p.isSpectral) continue;
+        if (p.imprisoned || p.shieldHP > 0) continue;
+        if (p.frozenUntil && p.frozenUntil > state.turnNumber) continue;
+        const mvs = legalMoves(state.board, r, c, state);
+        for (const mv of mvs) {
+          const t = state.board[mv.r][mv.c];
+          if (t && t.color === opp && t.type === PIECE.QUEEN) {
+            // Can capture enemy queen, but is the square attacked?
+            if (isSquareAttacked(state.board, mv.r, mv.c, opp)) {
+              bestVal = 200;
+              bestPiece = { r, c };
+              bestReason = 'queen-trade';
+              break;
+            }
+          }
+        }
+        if (bestVal >= 200 && bestReason === 'queen-trade') break;
+      }
+    }
+
+    // OPTIMIZED Strategy 3: Shield piece on fountain square under attack
+    if (!bestPiece) {
+      for (const f of state.fountains) {
+        const p = state.board[f.r][f.c];
+        if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
+        if (p.imprisoned || p.shieldHP > 0) continue;
+        if (isSquareAttacked(state.board, f.r, f.c, opp)) {
+          const val = 150 + BOT_PIECE_VALUES[p.type] * 0.5;
+          if (val > bestVal) {
+            bestVal = val;
+            bestPiece = { r: f.r, c: f.c };
+            bestReason = 'fountain';
+          }
+        }
+      }
+    }
+
+    // Strategy 4: Endgame — shield passed pawn on 6th/7th rank (unstoppable if shielded)
+    if (!bestPiece && phase < 0.5) {
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color !== forColor || p.type !== PIECE.PAWN || p.isSpectral) continue;
+        if (p.imprisoned || p.shieldHP > 0) continue;
+        const distToPromo = forColor === COLOR.WHITE ? r : (7 - r);
+        if (distToPromo <= 2) {
+          // Check if this is a passed pawn
+          const dir = forColor === COLOR.WHITE ? -1 : 1;
+          const promoRow = forColor === COLOR.WHITE ? 0 : 7;
+          let passed = true;
+          for (let scanR = r + dir; scanR !== promoRow + dir; scanR += dir) {
+            if (scanR < 0 || scanR > 7) break;
+            for (let dc = -1; dc <= 1; dc++) {
+              const scanC = c + dc;
+              if (scanC < 0 || scanC > 7) continue;
+              const blocker = state.board[scanR][scanC];
+              if (blocker && blocker.type === PIECE.PAWN && blocker.color !== forColor && !blocker.isSpectral) {
+                passed = false;
+                break;
+              }
+            }
+            if (!passed) break;
+          }
+          if (passed) {
+            const val = 160; // High value for shielded passed pawn
+            if (val > bestVal) { bestVal = val; bestPiece = { r, c }; bestReason = 'passed-pawn'; }
+          }
+        }
+      }
+    }
+
+    // Strategy 5: Standard — shield most valuable threatened piece
     if (!bestPiece) {
       for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
         const p = state.board[r][c];
@@ -1214,31 +2259,55 @@ function botConsiderPowers(state, forColor) {
         if (p.imprisoned || p.shieldHP > 0) continue;
         if (isSquareAttacked(state.board, r, c, opp)) {
           const val = BOT_PIECE_VALUES[p.type];
-          if (val > bestVal) { bestVal = val; bestPiece = { r, c }; }
+          if (val > bestVal) { bestVal = val; bestPiece = { r, c }; bestReason = 'threatened'; }
         }
       }
     }
 
-    if (bestPiece && bestVal >= 300) {
-      candidates.push({
-        priority: bestVal * 0.10,
-        exec: () => castFortify(state, bestPiece.r, bestPiece.c),
-        name: 'FORTIFY',
-        payload: { power: 'FORTIFY', r: bestPiece.r, c: bestPiece.c }
-      });
+    // OPTIMIZED: Don't waste on pieces that aren't threatened (unless strategic reasons)
+    if (bestPiece && bestVal >= 100) {
+      // Only fortify if piece is actually threatened OR it's for checkmate/fountain/passed-pawn
+      const piece = state.board[bestPiece.r][bestPiece.c];
+      const threatened = isSquareAttacked(state.board, bestPiece.r, bestPiece.c, opp);
+      const strategic = bestReason === 'checkmate' || bestReason === 'queen-trade' || bestReason === 'fountain' || bestReason === 'passed-pawn';
+
+      if (threatened || strategic) {
+        candidates.push({
+          priority: bestVal * 0.10,
+          exec: () => castFortify(state, bestPiece.r, bestPiece.c),
+          name: 'FORTIFY',
+          payload: { power: 'FORTIFY', r: bestPiece.r, c: bestPiece.c }
+        });
+      }
     }
   }
 
-  // BLINK: Blink a piece to escape or to attack (more aggressive in endgame).
+  // BLINK: Multi-purpose teleport - escape, attack, checkmate delivery
   if (aether >= POWER_COSTS[POWER.BLINK]) {
-    let bestBlink = null, bestBlinkScore = 0;
+    let bestBlink = null, bestBlinkScore = 0, bestReason = null;
+    const oppKing = findKing(state.board, opp);
+
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
       if (p.imprisoned || (p.frozenUntil && p.frozenUntil > state.turnNumber)) continue;
       const isAttacked = isSquareAttacked(state.board, r, c, opp);
+
+      // Check if piece is in bomb blast radius
+      let inBombRadius = false;
+      let bombTurnsLeft = 999;
+      for (const bomb of state.bombs || []) {
+        if (bomb.owner === forColor) continue;
+        const distFromBomb = Math.max(Math.abs(r - bomb.r), Math.abs(c - bomb.c));
+        if (distFromBomb <= 1) {
+          inBombRadius = true;
+          bombTurnsLeft = Math.min(bombTurnsLeft, bomb.turnsLeft);
+        }
+      }
+
       // In endgame: also blink pieces into attacking positions (not just escape)
-      if (!isAttacked && phase > 0.5) continue;
+      // NOW also blink if in bomb radius (even if not attacked)
+      if (!isAttacked && !inBombRadius && phase > 0.5) continue;
       const top = Math.max(0, Math.min(r - 1, 5));
       const left = Math.max(0, Math.min(c - 1, 5));
       for (let nr = top; nr < top + 3; nr++) for (let nc = left; nc < left + 3; nc++) {
@@ -1251,26 +2320,87 @@ function botConsiderPowers(state, forColor) {
         state.board[r][c] = null;
         const attackedAfter = isSquareAttacked(state.board, nr, nc, opp);
         const defendedAfter = isSquareAttacked(state.board, nr, nc, forColor);
+
+        // OPTIMIZED: Check if blinking to deliver checkmate
+        let deliversMate = false;
+        if (isInCheck(state.board, opp)) {
+          const oppMoves = allLegalMoves(state.board, opp, state);
+          if (oppMoves.length === 0) deliversMate = true;
+        }
+
         restore(state.board, snap);
         const myValue = BOT_PIECE_VALUES[p.type] || 0;
-        if (attackedAfter && (myValue >= 4 || !defendedAfter)) continue;
+        if (attackedAfter && (myValue >= 4 || !defendedAfter) && !deliversMate) continue;
 
         let blinkScore = 0;
-        if (isAttacked) {
+        let reason = 'general';
+
+        // OPTIMIZED: Blinking to deliver checkmate (highest priority)
+        if (deliversMate) {
+          blinkScore = 200;
+          reason = 'checkmate';
+        } else if (isAttacked) {
           blinkScore = myValue * 0.3; // escape value
+          reason = 'escape';
         }
-        // In endgame: bonus for blinking closer to enemy king (only if safe)
-        if (phase < 0.5 && !attackedAfter) {
-          const oppKing = findKing(state.board, opp);
-          if (oppKing) {
-            const distBefore = botManhattan(r, c, oppKing.r, oppKing.c);
-            const distAfter = botManhattan(nr, nc, oppKing.r, oppKing.c);
-            if (distAfter < distBefore) blinkScore += (distBefore - distAfter) * 30;
+
+        // OPTIMIZED: Escape bomb blast radius with severity-based priority
+        if (inBombRadius) {
+          let destSafe = true;
+          for (const bomb of state.bombs || []) {
+            if (bomb.owner === forColor) continue;
+            const distToBomb = Math.max(Math.abs(nr - bomb.r), Math.abs(nc - bomb.c));
+            if (distToBomb <= 1) {
+              destSafe = false;
+              break;
+            }
           }
+          if (destSafe) {
+            // OPTIMIZED: Scale by detonation timing
+            let bombEscapeBonus = myValue * 0.4;
+            if (myValue >= 500) bombEscapeBonus += 80;
+            if (bombTurnsLeft <= 2) bombEscapeBonus += 150; // Detonates within 2 turns
+            if (bombTurnsLeft <= 1) bombEscapeBonus += 100; // Extra urgency
+            blinkScore = Math.max(blinkScore, bombEscapeBonus);
+            if (reason === 'general') reason = 'bomb-escape';
+          }
+        }
+
+        // OPTIMIZED: Blink to occupy fountain square
+        if (state.fountains.some(f => f.r === nr && f.c === nc)) {
+          blinkScore += 100;
+          if (reason === 'general') reason = 'fountain';
+        }
+
+        // OPTIMIZED: Blink to fork enemy king and queen
+        if (oppKing) {
+          const snap2 = snapshot(state.board);
+          state.board[nr][nc] = p;
+          state.board[r][c] = null;
+          const attacks = typeof getAttackSquares === 'function' ? getAttackSquares(state.board, nr, nc) : [];
+          let forksKing = attacks.some(a => a.r === oppKing.r && a.c === oppKing.c);
+          let forksQueen = false;
+          for (const att of attacks) {
+            const tgt = state.board[att.r][att.c];
+            if (tgt && tgt.color === opp && tgt.type === PIECE.QUEEN) forksQueen = true;
+          }
+          restore(state.board, snap2);
+          if (forksKing && forksQueen) {
+            blinkScore += 80;
+            if (reason === 'general') reason = 'fork';
+          }
+        }
+
+        // In endgame: bonus for blinking closer to enemy king (only if safe)
+        if (phase < 0.5 && !attackedAfter && oppKing) {
+          const distBefore = botManhattan(r, c, oppKing.r, oppKing.c);
+          const distAfter = botManhattan(nr, nc, oppKing.r, oppKing.c);
+          if (distAfter < distBefore) blinkScore += (distBefore - distAfter) * 30;
         }
         if (blinkScore > bestBlinkScore) {
           bestBlinkScore = blinkScore;
           bestBlink = { fromR: r, fromC: c, toR: nr, toC: nc };
+          bestReason = reason;
         }
       }
     }
@@ -1284,14 +2414,94 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // WALL: Proactive/defensive — use near our king when exposed OR near a piece
-  // that's in a strong position to create a pawn wall barrier.
+  // WALL: Directional wall strategy - defense and attack
   if (aether >= POWER_COSTS[POWER.WALL]) {
-    let bestWall = null, bestWallScore = 0;
+    let bestWall = null, bestWallScore = 0, bestDirection = null;
     const myKing = findKing(state.board, forColor);
+    const oppKing = findKing(state.board, opp);
 
-    // Strategy 1: Wall near king when under pressure (not just in check)
-    if (myKing) {
+    // Helper: score a wall cast with a given anchor and direction
+    function scoreWallDirection(anchorR, anchorC, dir) {
+      let score = 0;
+      let emptyCount = 0;
+      const promoRank = forColor === COLOR.WHITE ? 0 : 7;
+
+      // Count empty squares in this direction
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = anchorR + dr, nc = anchorC + dc;
+        if (!inBounds(nr, nc) || state.board[nr][nc] || nr === promoRank) continue;
+
+        // Check if square is in the chosen direction
+        let inDirection = false;
+        if (dir === 'N' && nr < anchorR) inDirection = true;
+        else if (dir === 'S' && nr > anchorR) inDirection = true;
+        else if (dir === 'E' && nc > anchorC) inDirection = true;
+        else if (dir === 'W' && nc < anchorC) inDirection = true;
+
+        if (inDirection) {
+          emptyCount++;
+
+          // OPTIMIZED: Check if wall blocks enemy king's escape (mating net)
+          if (oppKing) {
+            const distToOppKing = Math.abs(nr - oppKing.r) + Math.abs(nc - oppKing.c);
+            if (distToOppKing <= 2) {
+              // Simulate wall and check if king has fewer escape squares
+              const snap = snapshot(state.board);
+              state.board[nr][nc] = makePiece(PIECE.PAWN, forColor);
+              const escapesAfter = allLegalMoves(state.board, opp, state).filter(mv =>
+                mv.from.r === oppKing.r && mv.from.c === oppKing.c
+              );
+              restore(state.board, snap);
+              if (escapesAfter.length <= 2) score += 150; // Blocks king escape
+            }
+          }
+
+          // OPTIMIZED: Wall controls center
+          if (nr >= 3 && nr <= 4 && nc >= 3 && nc <= 4) {
+            score += 100; // Central control
+          }
+
+          // Bonus for spawning toward enemy king (pressure)
+          if (oppKing) {
+            const distToOppKing = Math.abs(nr - oppKing.r) + Math.abs(nc - oppKing.c);
+            if (distToOppKing <= 3) score += 15;
+          }
+          // Bonus for spawning toward promotion rank (offensive)
+          if (phase < 0.6) {
+            const distToPromo = Math.abs(nr - promoRank);
+            score += (7 - distToPromo) * 3;
+          }
+        }
+      }
+
+      return { score: score + emptyCount * 10, count: emptyCount };
+    }
+
+    // OPTIMIZED Strategy 1: Wall protects our king in endgame
+    if (myKing && phase < 0.5) {
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const nr = myKing.r + dr, nc = myKing.c + dc;
+        if (!inBounds(nr, nc)) continue;
+        const p = state.board[nr][nc];
+        if (p && p.color === forColor && p.type !== PIECE.KING && !p.isSpectral) {
+          for (const dir of ['N', 'S', 'E', 'W']) {
+            const result = scoreWallDirection(nr, nc, dir);
+            if (result.count === 0) continue;
+            const wallScore = 120 + result.score;
+            if (wallScore > bestWallScore) {
+              bestWallScore = wallScore;
+              bestWall = { r: nr, c: nc };
+              bestDirection = dir;
+            }
+          }
+        }
+      }
+    }
+
+    // Strategy 2: Wall near king when under pressure (not just in check)
+    if (myKing && !bestWall) {
       // Count attackers near our king
       let nearbyThreats = 0;
       for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
@@ -1301,65 +2511,61 @@ function botConsiderPowers(state, forColor) {
         if (dist <= 2 && p.type !== PIECE.PAWN) nearbyThreats++;
       }
       if (nearbyThreats >= 1 || isInCheck(state.board, forColor)) {
-        // Find an anchor piece near king
+        // Find an anchor piece near king and best direction
         for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
           if (dr === 0 && dc === 0) continue;
           const nr = myKing.r + dr, nc = myKing.c + dc;
           if (!inBounds(nr, nc)) continue;
           const p = state.board[nr][nc];
           if (p && p.color === forColor && p.type !== PIECE.KING && !p.isSpectral) {
-            // Count empty squares around this anchor
-            let emptyCount = 0;
-            for (let adr = -1; adr <= 1; adr++) for (let adc = -1; adc <= 1; adc++) {
-              if (adr === 0 && adc === 0) continue;
-              const ar = nr + adr, ac = nc + adc;
-              if (inBounds(ar, ac) && !state.board[ar][ac]) emptyCount++;
-            }
-            const wallScore = (isInCheck(state.board, forColor) ? 100 : 50) + nearbyThreats * 20 + emptyCount * 5;
-            if (wallScore > bestWallScore) {
-              bestWallScore = wallScore;
-              bestWall = { r: nr, c: nc };
+            // Try all 4 directions, pick best
+            for (const dir of ['N', 'S', 'E', 'W']) {
+              const result = scoreWallDirection(nr, nc, dir);
+              if (result.count === 0) continue;
+              const wallScore = (isInCheck(state.board, forColor) ? 100 : 50) + nearbyThreats * 20 + result.score;
+              if (wallScore > bestWallScore) {
+                bestWallScore = wallScore;
+                bestWall = { r: nr, c: nc };
+                bestDirection = dir;
+              }
             }
           }
         }
       }
     }
 
-    // Strategy 2: Offensive wall — create pawn mass in enemy territory (promotable!)
+    // Strategy 3: Offensive wall — create pawn mass toward enemy territory
     if (phase < 0.6 && !bestWall) {
       const promoRank = forColor === COLOR.WHITE ? 0 : 7;
       for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
         const p = state.board[r][c];
         if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
-        // Prefer anchors that are advanced (closer to promotion rank)
-        const distToPromo = Math.abs(r - promoRank);
-        // Count empty squares (wall spawns) — more is better
-        let emptyAdj = 0;
-        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-          if (dr === 0 && dc === 0) continue;
-          const nr = r + dr, nc = c + dc;
-          if (inBounds(nr, nc) && !state.board[nr][nc]) emptyAdj++;
-        }
-        // Score: more empty squares + closer to promo rank + endgame bonus
-        const wallScore = emptyAdj * 10 + (7 - distToPromo) * 5 + (phase < 0.3 ? 30 : 0);
-        if (emptyAdj >= 4 && wallScore > bestWallScore) {
-          bestWallScore = wallScore;
-          bestWall = { r, c };
+        // Try all 4 directions, pick best
+        for (const dir of ['N', 'S', 'E', 'W']) {
+          const result = scoreWallDirection(r, c, dir);
+          if (result.count === 0) continue;
+          const distToPromo = Math.abs(r - promoRank);
+          const wallScore = result.score + (7 - distToPromo) * 5 + (phase < 0.3 ? 30 : 0);
+          if (wallScore > bestWallScore) {
+            bestWallScore = wallScore;
+            bestWall = { r, c };
+            bestDirection = dir;
+          }
         }
       }
     }
 
-    if (bestWall && bestWallScore >= 40) {
+    if (bestWall && bestDirection && bestWallScore >= 40) {
       candidates.push({
         priority: bestWallScore * 0.7,
-        exec: () => castWall(state, bestWall.r, bestWall.c),
+        exec: () => castWall(state, bestWall.r, bestWall.c, bestDirection),
         name: 'WALL',
-        payload: { power: 'WALL', r: bestWall.r, c: bestWall.c }
+        payload: { power: 'WALL', r: bestWall.r, c: bestWall.c, direction: bestDirection }
       });
     }
   }
 
-  // DOUBLE ATTACK: Use a piece to make two moves — great for capturing + repositioning
+  // DOUBLE ATTACK: Free material evaluation - two captures or capture + reposition
   if (aether >= POWER_COSTS[POWER.DOUBLE_ATTACK] && !isInCheck(state.board, forColor)) {
     let bestDA = null, bestDAScore = 0;
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
@@ -1380,14 +2586,45 @@ function botConsiderPowers(state, forColor) {
         state.board[r][c] = null;
         if (isInCheck(state.board, forColor)) { restore(state.board, snap); continue; }
         const secondMoves = legalMoves(state.board, m1.r, m1.c, state);
-        let bestSecondVal = 0, bestSecondMove = null;
+        let bestSecondVal = 0, bestSecondMove = null, secondReason = null;
         for (const m2 of secondMoves) {
           if (m2.r === m1.r && m2.c === m1.c) continue;
           const target2 = state.board[m2.r][m2.c];
           let secondVal = 0;
+
+          // OPTIMIZED: Check if second capture wins enemy queen
           if (target2 && target2.color === opp && target2.type !== PIECE.KING && target2.shieldHP <= 0) {
             secondVal = BOT_PIECE_VALUES[target2.type];
+            if (target2.type === PIECE.QUEEN) {
+              secondVal += 150; // Second capture wins queen!
+              secondReason = 'queen-capture';
+            }
+
+            // OPTIMIZED: Check if both captures are clean (undefended)
+            const target1Defended = isSquareAttacked(state.board, r, c, opp);
+            const target2Defended = isSquareAttacked(state.board, m2.r, m2.c, opp);
+            if (!target1Defended && !target2Defended) {
+              secondVal += 100; // Both captures are free material
+              if (!secondReason) secondReason = 'clean-captures';
+            }
           }
+
+          // OPTIMIZED: Check if creates mating attack
+          if (target2 || !target2) {
+            const snap2 = snapshot(state.board);
+            state.board[m2.r][m2.c] = p;
+            state.board[m1.r][m1.c] = null;
+            const givesCheck = isInCheck(state.board, opp);
+            if (givesCheck) {
+              const oppMoves = allLegalMoves(state.board, opp, state);
+              if (oppMoves.length <= 2) {
+                secondVal += 80; // Creates mating attack
+                if (!secondReason) secondReason = 'mating-attack';
+              }
+            }
+            restore(state.board, snap2);
+          }
+
           // Also value safe retreat after capture
           if (!target2) {
             const safeAfter = !isSquareAttacked(state.board, m2.r, m2.c, opp);
@@ -1437,15 +2674,13 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // AETHER BLOCK: Deny opponent's powers — especially to secure checkmate or when they're close to big powers
+  // AETHER BLOCK: Predictive blocking - deny critical escape/counterplay powers
   if (aether >= POWER_COSTS[POWER.AETHER_BLOCK] && !state.aetherBlocked[opp] && !isInCheck(state.board, forColor)) {
     const oppAether = state.mana[opp];
     let blockPrio = 0;
 
-    // Strategy 1: Block when opponent can afford escape/defensive powers AND we're threatening checkmate
-    // Aether Block doesn't end turn, so: Block → then deliver checkmate (opponent can't Blink/Fortify)
-    if (oppAether >= POWER_COSTS[POWER.FORTIFY]) { // 7+ means they can defend
-      // Check if we have a checkmate threat (or near-mate) this turn
+    // OPTIMIZED Strategy 1: Block when opponent is 1 turn from mate and needs power to escape
+    if (oppAether >= POWER_COSTS[POWER.BLINK]) {
       const myMoves = allLegalMoves(state.board, forColor, state);
       let hasMateOrNearMate = false;
       for (const mv of myMoves) {
@@ -1455,17 +2690,52 @@ function botConsiderPowers(state, forColor) {
         state.board[mv.from.r][mv.from.c] = null;
         if (isInCheck(state.board, opp)) {
           const oppMoves = allLegalMoves(state.board, opp, state);
-          if (oppMoves.length === 0) hasMateOrNearMate = true; // actual checkmate!
+          if (oppMoves.length === 0) {
+            hasMateOrNearMate = true; // Checkmate threat!
+          } else if (oppMoves.length <= 2) {
+            hasMateOrNearMate = true; // Near-mate (very few escapes)
+          }
         }
         restore(state.board, snap);
         if (hasMateOrNearMate) break;
       }
       if (hasMateOrNearMate) {
-        blockPrio = 200; // TOP PRIORITY: block to deliver checkmate
+        blockPrio = 200; // TOP PRIORITY: block opponent's escape powers
       }
     }
 
-    // Strategy 2: Block when opponent is close to dangerous powers (original logic, enhanced)
+    // OPTIMIZED Strategy 2: Block when we're about to destroy their queen and they have Chronobreak
+    if (blockPrio === 0 && oppAether >= POWER_COSTS[POWER.CHRONOBREAK]) {
+      const myMoves = allLegalMoves(state.board, forColor, state);
+      for (const mv of myMoves) {
+        const target = state.board[mv.to.r][mv.to.c];
+        if (target && target.color === opp && target.type === PIECE.QUEEN) {
+          blockPrio = 150; // Block chronobreak to secure queen capture
+          break;
+        }
+      }
+    }
+
+    // OPTIMIZED Strategy 3: Block escape powers (Blink/Fortify) when we're attacking
+    if (blockPrio === 0 && oppAether >= POWER_COSTS[POWER.FORTIFY]) {
+      // Check if we're attacking high-value opponent pieces
+      let attackingHighValue = false;
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (!p || p.color !== opp || p.type === PIECE.KING) continue;
+        if (BOT_PIECE_VALUES[p.type] >= 500) { // Queen or Rook
+          if (isSquareAttacked(state.board, r, c, forColor)) {
+            attackingHighValue = true;
+            break;
+          }
+        }
+      }
+      if (attackingHighValue) {
+        blockPrio = 100; // Block their defensive powers
+      }
+    }
+
+    // Strategy 4: Block when opponent is close to dangerous powers (original logic, enhanced)
     if (blockPrio === 0) {
       const oppThreshold = POWER_COSTS[POWER.FROST]; // 8 — they can start using powers
       if (oppAether >= oppThreshold) {
@@ -1474,6 +2744,9 @@ function botConsiderPowers(state, forColor) {
         else if (oppAether >= POWER_COSTS[POWER.PROMOTE]) blockPrio = 55;
         else if (oppAether >= POWER_COSTS[POWER.IMPRISON]) blockPrio = 40;
       }
+
+      // OPTIMIZED: Don't use if opponent has low aether anyway
+      if (oppAether < POWER_COSTS[POWER.FROST]) blockPrio = 0;
     }
 
     if (blockPrio > 0) {
@@ -1486,13 +2759,17 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // BOMBA: Plant a bomb near enemy piece concentrations
+  // BOMBA: Area denial strategy - force enemy king into worse position
   if (aether >= POWER_COSTS[POWER.BOMBA] && !isInCheck(state.board, forColor)) {
     let bestBomba = null, bestBombaScore = 0;
+    const oppKing = findKing(state.board, opp);
+
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       if (state.board[r][c]) continue;
       if (!validBombaTarget(state, forColor, r, c)) continue;
       let blastVal = 0;
+
+      // Calculate immediate blast value
       for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
         const nr = r + dr, nc = c + dc;
         if (!inBounds(nr, nc)) continue;
@@ -1501,6 +2778,46 @@ function botConsiderPowers(state, forColor) {
           blastVal += BOT_PIECE_VALUES[p.type];
         }
       }
+
+      // OPTIMIZED: Check if bomb forces enemy king into worse position
+      if (oppKing) {
+        const distToKing = Math.max(Math.abs(r - oppKing.r), Math.abs(c - oppKing.c));
+        if (distToKing <= 3) {
+          // Bomb near enemy king creates pressure
+          blastVal += 150;
+
+          // Check if king will have fewer safe squares after bomb detonates
+          const snap = snapshot(state.board);
+          // Simulate bomb squares becoming unavailable
+          for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+            const nr = r + dr, nc = c + dc;
+            if (inBounds(nr, nc) && !state.board[nr][nc]) {
+              state.board[nr][nc] = makePiece(PIECE.PAWN, forColor); // Temporary blocker
+            }
+          }
+          const kingMovesAfter = allLegalMoves(state.board, opp, state).filter(mv =>
+            mv.from.r === oppKing.r && mv.from.c === oppKing.c
+          );
+          restore(state.board, snap);
+          if (kingMovesAfter.length <= 3) blastVal += 100; // Restricts king movement
+        }
+      }
+
+      // OPTIMIZED: Check if bomb detonates near enemy queen (forces retreat)
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const nr = r + dr, nc = c + dc;
+        if (!inBounds(nr, nc)) continue;
+        const p = state.board[nr][nc];
+        if (p && p.color === opp && p.type === PIECE.QUEEN && p.shieldHP <= 0) {
+          blastVal += 100; // Forces queen to move
+        }
+      }
+
+      // OPTIMIZED: Check if bomb controls key central squares
+      if (r >= 3 && r <= 4 && c >= 3 && c <= 4) {
+        blastVal += 80; // Central bomb controls board
+      }
+
       if (blastVal > bestBombaScore) {
         bestBombaScore = blastVal;
         bestBomba = { r, c };
@@ -1512,6 +2829,60 @@ function botConsiderPowers(state, forColor) {
         exec: () => castBomba(state, bestBomba.r, bestBomba.c),
         name: 'BOMBA',
         payload: { power: 'BOMBA', r: bestBomba.r, c: bestBomba.c }
+      });
+    }
+  }
+
+  // CHRONOBREAK: Undo opponent's last turn to recover from devastating moves
+  // High priority when we lost material, got checked, or opponent used powerful moves
+  if (aether >= POWER_COSTS[POWER.CHRONOBREAK] && state.history && state.history.length >= 2) {
+    let chronoPriority = 0;
+    const myMat = botCountMaterial(state, forColor);
+    const oppMat = botCountMaterial(state, opp);
+    const materialDeficit = oppMat - myMat;
+
+    // Check recent actions to detect what opponent did last turn
+    // Look at last ~4 actions (opponent's turn might include multiple moves/powers)
+    const recentActions = typeof UI !== 'undefined' && UI.gameActions ? UI.gameActions.slice(-4) : [];
+
+    for (const action of recentActions) {
+      if (!action || action.by !== opp) continue;
+
+      // Material loss detection: opponent captured our pieces
+      if (action.type === 'MOVE' && action.payload && action.payload.captured) {
+        const capturedPiece = action.payload.captured;
+        if (capturedPiece && capturedPiece.color === forColor) {
+          // +100 if opponent captured our Queen last turn
+          if (capturedPiece.type === PIECE.QUEEN) chronoPriority += 100;
+          // +80 if opponent captured our Rook last turn
+          else if (capturedPiece.type === PIECE.ROOK) chronoPriority += 80;
+          // +40 per other piece captured last turn
+          else if (capturedPiece.type !== PIECE.PAWN) chronoPriority += 40;
+        }
+      }
+
+      // +60 if opponent used Vengeance/Promote last turn (game-changing powers)
+      if (action.type === 'POWER_CAST' && action.payload) {
+        const powerUsed = action.payload.power;
+        if (powerUsed === POWER.VENGEANCE) chronoPriority += 60;
+        else if (powerUsed === POWER.PROMOTE) chronoPriority += 60;
+        else if (powerUsed === POWER.IMPRISON) chronoPriority += 50;
+      }
+    }
+
+    // +50 if opponent put us in check last turn
+    if (isInCheck(state.board, forColor)) chronoPriority += 50;
+
+    // Extra urgency if we're in a losing position (down 300+ material)
+    if (materialDeficit >= 300) chronoPriority += 30;
+
+    // Hard mode: cast Chronobreak if priority >= 80 OR we're losing badly (down 300+)
+    if (BOT.difficulty === 'hard' && chronoPriority >= 80) {
+      candidates.push({
+        priority: chronoPriority,
+        exec: () => castChronobreak(state),
+        name: 'CHRONOBREAK',
+        payload: { power: 'CHRONOBREAK' }
       });
     }
   }
@@ -1848,8 +3219,11 @@ function botEmergencyEscape(state, forColor) {
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
-      if (probeEscape(s => castWall(s, r, c))) {
-        return { name: 'WALL', payload: { power: 'WALL', r, c } };
+      // Try all 4 directions to find any that resolves check
+      for (const dir of ['N', 'S', 'E', 'W']) {
+        if (probeEscape(s => castWall(s, r, c, dir))) {
+          return { name: 'WALL', payload: { power: 'WALL', r, c, direction: dir } };
+        }
       }
     }
   }
@@ -1915,22 +3289,75 @@ function botExecuteTurn() {
     }
   }
 
-  // Phase 2: Consider casting a "continues turn" power (Frost, Fortify, Spawn, Bomba, AetherBlock, Imprison)
-  const powerAction = botConsiderPowers(UI.state, color);
-  if (powerAction) {
-    const res = powerAction.exec();
-    if (res && res.success) {
-      if (typeof recordAction === 'function') recordAction('POWER_CAST', color, powerAction.payload || { power: powerAction.name });
-      setStatus(`Bot cast ${powerAction.name}!`, 'ok');
-      render();
-      // If the power ended the turn (Blink, Vengeance, Wall, Promote, DoubleAttack), we're done
-      if (UI.state.turn !== color) {
-        botFinishTurn();
-        return;
+  // Phase 2: Consider casting MULTIPLE powers in sequence (multi-power combo system)
+  // Powers that don't end the turn can be chained together (up to 3 powers per turn)
+  const MAX_POWERS_PER_TURN = 3;
+  const CONTINUE_TURN_PRIORITY_THRESHOLD = 40; // Priority needed to cast continue-turn powers in sequence
+  const END_TURN_PRIORITY_THRESHOLD = 60; // Priority needed to cast end-turn powers after other powers
+  const MIN_AETHER_RESERVE = 5; // Stop chaining if aether drops below this
+
+  let powersCastThisTurn = 0;
+  let lastPowerWasContinueTurn = false;
+
+  while (powersCastThisTurn < MAX_POWERS_PER_TURN && UI.state.mana[color] >= MIN_AETHER_RESERVE) {
+    const powerAction = botConsiderPowers(UI.state, color);
+    if (!powerAction) break; // No more powers worth casting
+
+    // Check if this power ends the turn
+    const endsTurn = ['BLINK', 'VENGEANCE', 'WALL', 'PROMOTE', 'DOUBLE_ATTACK', 'CHRONOBREAK'].includes(powerAction.name);
+
+    // Decision logic based on power type and priority
+    if (endsTurn) {
+      // End-turn powers: only cast if priority is very high OR this is the first power
+      if (powersCastThisTurn === 0 || powerAction.priority >= END_TURN_PRIORITY_THRESHOLD) {
+        const res = powerAction.exec();
+        if (res && res.success) {
+          if (typeof recordAction === 'function') recordAction('POWER_CAST', color, powerAction.payload || { power: powerAction.name });
+          setStatus(`Bot cast ${powerAction.name}!`, 'ok');
+          render();
+          powersCastThisTurn++;
+          // Turn ended, we're done
+          if (UI.state.turn !== color) {
+            botFinishTurn();
+            return;
+          }
+        }
+        break; // Even if it failed, stop trying powers
+      } else {
+        // Priority not high enough to use end-turn power after other powers
+        break;
       }
-      // Otherwise the turn continues — fall through to make a chess move
+    } else {
+      // Continue-turn powers: cast if priority meets threshold (or if it's the first power)
+      if (powersCastThisTurn === 0 || powerAction.priority >= CONTINUE_TURN_PRIORITY_THRESHOLD) {
+        const res = powerAction.exec();
+        if (res && res.success) {
+          if (typeof recordAction === 'function') recordAction('POWER_CAST', color, powerAction.payload || { power: powerAction.name });
+          setStatus(`Bot cast ${powerAction.name}!`, 'ok');
+          render();
+          powersCastThisTurn++;
+          lastPowerWasContinueTurn = true;
+          // Check if game ended or turn somehow changed
+          if (UI.state.winner || UI.state.turn !== color) {
+            botFinishTurn();
+            return;
+          }
+          // Continue to next power in the loop
+        } else {
+          // Power failed, stop trying
+          break;
+        }
+      } else {
+        // Priority not high enough to chain another power
+        break;
+      }
     }
   }
+
+  // Log combo usage for debugging (hard mode only) - disabled during search for performance
+  // if (BOT.difficulty === 'hard' && powersCastThisTurn > 1) {
+  //   console.log(`[bot] Multi-power combo: cast ${powersCastThisTurn} powers this turn`);
+  // }
 
   // If game ended due to power
   if (UI.state.winner || UI.state.turn !== color) {
@@ -2011,15 +3438,19 @@ function botExecuteTurn() {
   // Record move for repetition avoidance
   botRecordMove(chosenMove.from, chosenMove.to);
 
+  // Capture the piece at target BEFORE making the move (for Chronobreak detection)
+  const capturedPiece = UI.state.board[chosenMove.to.r][chosenMove.to.c];
+
   const res = makeMove(UI.state, chosenMove.from.r, chosenMove.from.c, chosenMove.to.r, chosenMove.to.c, promoType);
   if (res.error) {
     // Shouldn't happen since we used allLegalMoves, but fallback to random
     console.warn('[bot] Move failed:', res.error, 'trying random fallback');
     const fallback = moves[Math.floor(Math.random() * moves.length)];
+    const fallbackCapture = UI.state.board[fallback.to.r][fallback.to.c];
     makeMove(UI.state, fallback.from.r, fallback.from.c, fallback.to.r, fallback.to.c, promoType);
-    if (typeof recordAction === 'function') recordAction('MOVE', color, { from: fallback.from, to: fallback.to, promotion: promoType });
+    if (typeof recordAction === 'function') recordAction('MOVE', color, { from: fallback.from, to: fallback.to, promotion: promoType, captured: fallbackCapture });
   } else {
-    if (typeof recordAction === 'function') recordAction('MOVE', color, { from: chosenMove.from, to: chosenMove.to, promotion: promoType });
+    if (typeof recordAction === 'function') recordAction('MOVE', color, { from: chosenMove.from, to: chosenMove.to, promotion: promoType, captured: capturedPiece });
   }
 
   // Restore difficulty

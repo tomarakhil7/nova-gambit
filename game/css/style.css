@@ -2821,3 +2821,89 @@ button.study-btn {
 .btp-reason { color: #7a8098; }
 
 /* (Responsive rules consolidated near the top of this file.) */
+
+/* ========================================================
+   Wall Direction Picker Modal
+   ======================================================== */
+.wall-direction-modal {
+  max-width: 380px;
+}
+
+.wall-direction-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.wall-dir-btn {
+  background: linear-gradient(135deg, rgba(80, 140, 220, 0.15) 0%, rgba(120, 80, 220, 0.1) 100%);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-family: inherit;
+}
+
+.wall-dir-btn:hover {
+  background: linear-gradient(135deg, rgba(80, 140, 220, 0.25) 0%, rgba(120, 80, 220, 0.2) 100%);
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(85, 185, 255, 0.3);
+}
+
+.wall-dir-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(85, 185, 255, 0.2);
+}
+
+/* Position North at top center */
+.wall-dir-btn[data-dir="N"] {
+  grid-column: 2;
+}
+
+/* Position West, East, South on bottom row */
+.wall-dir-btn[data-dir="W"] {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.wall-dir-btn[data-dir="E"] {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.wall-dir-btn[data-dir="S"] {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.wall-dir-arrow {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.wall-dir-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+.wall-dir-btn:hover .wall-dir-arrow {
+  color: var(--aether);
+  filter: drop-shadow(0 0 8px var(--aether-glow));
+}
+
+.wall-dir-btn:hover .wall-dir-label {
+  color: var(--text);
+}
