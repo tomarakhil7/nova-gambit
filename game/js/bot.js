@@ -142,6 +142,112 @@ const BOT_OPENINGS = {
   ]
 };
 
+// Helper: Get all squares a piece attacks from a given position
+// Returns array of {r, c} squares that the piece at (r, c) attacks
+function getAttackSquares(board, r, c) {
+  const piece = board[r][c];
+  if (!piece) return [];
+
+  const attacked = [];
+  const color = piece.color;
+  const type = piece.type;
+
+  // For each square on the board, check if piece attacks it
+  for (let tr = 0; tr < 8; tr++) {
+    for (let tc = 0; tc < 8; tc++) {
+      if (tr === r && tc === c) continue; // Skip own square
+
+      const dr = tr - r;
+      const dc = tc - c;
+      const absDr = Math.abs(dr);
+      const absDc = Math.abs(dc);
+
+      let attacks = false;
+
+      switch (type) {
+        case PIECE.PAWN:
+          // Pawns attack diagonally
+          const dir = color === COLOR.WHITE ? -1 : 1;
+          if (dr === dir && absDc === 1) attacks = true;
+          break;
+
+        case PIECE.KNIGHT:
+          // Knight L-shape
+          if ((absDr === 2 && absDc === 1) || (absDr === 1 && absDc === 2)) {
+            attacks = true;
+          }
+          break;
+
+        case PIECE.BISHOP:
+          // Diagonal
+          if (absDr === absDc && absDr > 0) {
+            // Check path is clear
+            const stepR = dr > 0 ? 1 : -1;
+            const stepC = dc > 0 ? 1 : -1;
+            let blocked = false;
+            for (let i = 1; i < absDr; i++) {
+              if (board[r + i * stepR][c + i * stepC]) {
+                blocked = true;
+                break;
+              }
+            }
+            if (!blocked) attacks = true;
+          }
+          break;
+
+        case PIECE.ROOK:
+          // Straight lines
+          if ((dr === 0 && dc !== 0) || (dr !== 0 && dc === 0)) {
+            // Check path is clear
+            const stepR = dr === 0 ? 0 : (dr > 0 ? 1 : -1);
+            const stepC = dc === 0 ? 0 : (dc > 0 ? 1 : -1);
+            const dist = Math.max(absDr, absDc);
+            let blocked = false;
+            for (let i = 1; i < dist; i++) {
+              if (board[r + i * stepR][c + i * stepC]) {
+                blocked = true;
+                break;
+              }
+            }
+            if (!blocked) attacks = true;
+          }
+          break;
+
+        case PIECE.QUEEN:
+          // Combination of rook + bishop
+          if ((dr === 0 && dc !== 0) || (dr !== 0 && dc === 0) || (absDr === absDc && absDr > 0)) {
+            // Check path is clear
+            const stepR = dr === 0 ? 0 : (dr > 0 ? 1 : -1);
+            const stepC = dc === 0 ? 0 : (dc > 0 ? 1 : -1);
+            const dist = Math.max(absDr, absDc);
+            let blocked = false;
+            for (let i = 1; i < dist; i++) {
+              if (board[r + i * stepR][c + i * stepC]) {
+                blocked = true;
+                break;
+              }
+            }
+            if (!blocked) attacks = true;
+          }
+          break;
+
+        case PIECE.KING:
+          // One square in any direction
+          if (absDr <= 1 && absDc <= 1 && (absDr > 0 || absDc > 0)) {
+            attacks = true;
+          }
+          break;
+      }
+
+      if (attacks) {
+        attacked.push({r: tr, c: tc});
+      }
+    }
+  }
+
+  return attacked;
+}
+
 function botGetBookMove(state, forColor, moves) {
   if (state.turnNumber > 6) return null; // only first 3 full moves
 
