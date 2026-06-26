@@ -2595,6 +2595,13 @@ function botConsiderPowers(state, forColor) {
   const phase = botGamePhase(state);
   const candidates = [];
 
+  // ===== AETHER CAP EMERGENCY =====
+  // At 30/30, we're WASTING aether generation every turn!
+  // Bias heavily toward spending to avoid waste
+  if (aether >= 30) {
+    console.error(`[BOT CAP WARNING] At ${aether}/30 aether - MUST spend aggressively!`);
+  }
+
   // ===== LAYER 4: ANTI-HOARDING CHECK =====
   const powerStrategy = botDynamicPowerSelection(state, forColor);
 
@@ -2737,8 +2744,22 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // If hoarding past 25 aether, boost ALL power priorities to force spending
-  const hoardingMultiplier = (powerStrategy.urgent && aether >= 25) ? 1.5 : 1.0;
+  // AGGRESSIVE ANTI-HOARDING: Force spending when near/at cap
+  // At 30/30 (cap), every turn without spending = wasted aether generation!
+  let hoardingMultiplier = 1.0;
+  if (aether >= 30) {
+    // AT CAP: Desperate! Triple all power priorities
+    hoardingMultiplier = 3.0;
+  } else if (aether >= 27) {
+    // Near cap: Very aggressive spending
+    hoardingMultiplier = 2.5;
+  } else if (aether >= 25) {
+    // High aether: Aggressive spending
+    hoardingMultiplier = 2.0;
+  } else if (aether >= 22) {
+    // Moderate spending encouragement
+    hoardingMultiplier = 1.5;
+  }
 
   // VENGEANCE: Destroy the most valuable enemy piece — TOP PRIORITY
   // This is the most impactful power for gaining/converting advantage.
