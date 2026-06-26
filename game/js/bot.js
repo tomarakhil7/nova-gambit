@@ -2532,9 +2532,18 @@ function botConsiderPowers(state, forColor) {
   }
 
   // ===== LAYER 6-8: ADVANCED TACTICAL INTELLIGENCE =====
-  const tacticalPatterns = botDetectTacticalPatterns(state, forColor);
-  const threats = botEvaluateThreats(state, forColor);
-  const powerSequences = botGeneratePowerSequences(state, forColor);
+  // Wrapped in try-catch to prevent errors from breaking bot
+  let tacticalPatterns = [];
+  let threats = [];
+  let powerSequences = [];
+  try {
+    tacticalPatterns = botDetectTacticalPatterns(state, forColor);
+    threats = botEvaluateThreats(state, forColor);
+    powerSequences = botGeneratePowerSequences(state, forColor);
+  } catch (e) {
+    console.error('[bot] Error in tactical intelligence:', e);
+    // Continue with empty arrays - bot will use basic power evaluation
+  }
 
   // Analysis logging
   if (aether >= 14) {
@@ -4221,18 +4230,28 @@ function botPlay() {
 
   const delay = BOT.botVsBot ? BOT.thinkDelay : BOT.thinkDelay;
   setTimeout(() => {
+    let errorOccurred = false;
     try {
       botExecuteTurn();
     } catch (e) {
       console.error('[bot] Error during turn:', e);
+      console.error('[bot] Bot disabled due to error. Refresh page to restart.');
+      errorOccurred = true;
+      // Disable bot to prevent infinite error loop
+      BOT.enabled = false;
+      BOT.thinking = false;
+      setStatus('Bot error - please refresh page', 'error');
     }
-    // CRITICAL: Clear thinking flag BEFORE triggering next render/botCheckTurn
-    // Otherwise botCheckTurn sees BOT.thinking=true and skips, breaking the loop.
-    BOT.thinking = false;
-    // Re-trigger to ensure next bot move fires (render inside botFinishTurn
-    // may have called botCheckTurn while thinking was still true)
-    if (BOT.enabled && !UI.state.winner) {
-      setTimeout(() => botCheckTurn(), 16);
+
+    if (!errorOccurred) {
+      // CRITICAL: Clear thinking flag BEFORE triggering next render/botCheckTurn
+      // Otherwise botCheckTurn sees BOT.thinking=true and skips, breaking the loop.
+      BOT.thinking = false;
+      // Re-trigger to ensure next bot move fires (render inside botFinishTurn
+      // may have called botCheckTurn while thinking was still true)
+      if (BOT.enabled && !UI.state.winner) {
+        setTimeout(() => botCheckTurn(), 16);
+      }
     }
   }, delay);
 }
