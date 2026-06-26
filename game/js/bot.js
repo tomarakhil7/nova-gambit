@@ -62,7 +62,7 @@ const BOT = {
   enabled: false,
   color: null,       // 'w' or 'b' — the color the bot plays (single-bot mode)
   difficulty: 'medium', // 'easy' | 'medium' | 'hard'
-  thinkDelay: 600,   // ms delay before bot plays (feels more natural)
+  thinkDelay: 200,   // ms delay before bot plays (reduced for faster gameplay)
   thinking: false,
   // Bot vs Bot mode
   botVsBot: false,
@@ -700,7 +700,14 @@ function botEvaluate(state, forColor) {
           const distToPromo = p.color === COLOR.WHITE ? r : (7 - r);
           const passedBonus = (7 - distToPromo) * 25; // big bonus for close-to-promotion
           if (p.color === forColor) score += passedBonus;
-          else score -= passedBonus;
+          else {
+            // FIX 1: HUGE PENALTY for enemy pawns on 7th rank (about to promote)
+            if (distToPromo === 1) {
+              score -= 700; // Massive threat - must stop!
+            } else {
+              score -= passedBonus;
+            }
+          }
         }
       }
     }
@@ -973,6 +980,32 @@ function botEvaluate(state, forColor) {
     }
   }
 
+  // ===== LAYER 1: AETHER ECONOMY AWARENESS =====
+  // Center control = +1 aether/turn = strategic value
+  const centerSquares = [{r:4,c:3},{r:4,c:4},{r:3,c:3},{r:3,c:4}];
+  let myCenterPieces = 0, oppCenterPieces = 0;
+  for (const sq of centerSquares) {
+    const p = state.board[sq.r][sq.c];
+    if (!p || p.isSpectral) continue;
+    if (p.color === forColor) myCenterPieces++;
+    else oppCenterPieces++;
+  }
+  if (myCenterPieces > oppCenterPieces) {
+    score += 150; // Worth 1.5 pawns - very strong for aether economy!
+  }
+
+  // AETHER BANK VALUE - aether IS power
+  // Diminishing returns: first 10 points worth more than last 10
+  const myAether = state.mana[forColor];
+  const oppAether = state.mana[opp];
+  function aetherValue(a) {
+    if (a <= 10) return a * 20; // Early aether very valuable
+    if (a <= 20) return 200 + (a-10) * 15; // Mid aether valuable
+    return 350 + (a-20) * 10; // Late aether less valuable (capped soon)
+  }
+  const aetherAdvantage = aetherValue(myAether) - aetherValue(oppAether);
+  score += aetherAdvantage;
+
   return score;
 }
 
@@ -980,6 +1013,7 @@ function botEvaluate(state, forColor) {
 function botScoreMove(state, from, to, forColor) {
   let score = 0;
   const piece = state.board[from.r][from.c];
+  if (!piece) return -99999; // Safety: invalid move with no piece at source
   const target = state.board[to.r][to.c];
   const phase = botGamePhase(state);
   const opp = opposite(forColor);
@@ -994,6 +1028,40 @@ function botScoreMove(state, from, to, forColor) {
       const myMat = botCountMaterial(state, forColor);
       const oppMat = botCountMaterial(state, opp);
       if (myMat - oppMat > 200) score += BOT_PIECE_VALUES[target.type] * 2;
+
+      // FIX 2: HUGE BONUS for capturing enemy pawns on 6th/7th rank
+      if (target.type === PIECE.PAWN) {
+        const distToPromo = target.color === COLOR.WHITE ? to.r : (7 - to.r);
+        if (distToPromo <= 2) {
+          score += 600; // Critical capture - stop the promotion threat!
+        }
+      }
+    }
+  }
+
+  // SEE CHECK: Before applying positional bonuses, verify the move doesn't lose material
+  // This prevents the bot from making tactical blunders masked by positional scoring
+  if (target && target.color !== piece.color) {
+    const seeScore = botSEE(state, to.r, to.c, from.r, from.c, forColor);
+    // If SEE is very negative (losing significant material), drastically reduce move score
+    if (seeScore < -100) {
+      score += seeScore * 5; // Heavy penalty for bad trades
+
+      // LAYER 2: Smart Trading - check aether context for marginal trades
+      const tradeEval = botEvaluateTrade(piece, target, state.mana[forColor], state.mana[opp]);
+      if (tradeEval > 50) {
+        // Aether context makes this trade acceptable despite SEE
+        score += 100; // Offset some of the penalty
+      }
+
+      // Don't apply positional bonuses to losing captures
+      return score;
+    }
+
+    // LAYER 2: For even/slight-loss trades, factor in aether advantage
+    if (seeScore >= -100 && seeScore <= 0) {
+      const tradeEval = botEvaluateTrade(piece, target, state.mana[forColor], state.mana[opp]);
+      score += tradeEval * 0.5; // Bonus/penalty based on aether context
     }
   }
 
@@ -1075,6 +1143,24 @@ function botScoreMove(state, from, to, forColor) {
         score += (oldDist - newDist) * 20; // reward approaching enemy king
       }
     }
+
+    // FIX 3: When BEHIND in material, king should attack dangerous enemy pawns
+    if (myMat - oppMat < -200) {
+      // Look for enemy pawns on 6th/7th rank near destination
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const nr = to.r + dr, nc = to.c + dc;
+          if (!inBounds(nr, nc)) continue;
+          const p = state.board[nr][nc];
+          if (p && p.color === opp && p.type === PIECE.PAWN) {
+            const distToPromo = p.color === COLOR.WHITE ? nr : (7 - nr);
+            if (distToPromo <= 2) {
+              score += 300; // King must attack dangerous pawns when desperate!
+            }
+          }
+        }
+      }
+    }
   }
 
   // CHECK BONUS: Lightweight heuristic — attacks near enemy king suggest check potential
@@ -1100,45 +1186,118 @@ function botCountMaterial(state, color) {
   return total;
 }
 
+// ---------- Static Exchange Evaluation (SEE) ----------
+// Calculates the material outcome of a full exchange sequence on a square.
+// Returns the net material gain/loss for the side initiating the capture.
+function botSEE(state, targetR, targetC, attackerR, attackerC, forColor) {
+  const opp = opposite(forColor);
+  const target = state.board[targetR][targetC];
+  const attacker = state.board[attackerR][attackerC];
+
+  if (!target || !attacker) return 0;
+
+  // If target is shielded, SEE is always bad (we only break shield)
+  if (target.shieldHP > 0) return -BOT_PIECE_VALUES[attacker.type];
+
+  // Build list of attackers for both sides
+  function findAttackers(board, targetR, targetC, color) {
+    const attackers = [];
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const p = board[r][c];
+        if (!p || p.color !== color || p.isSpectral) continue;
+        if (p.imprisoned || (p.frozenUntil && p.frozenUntil > state.turnNumber)) continue;
+
+        const moves = legalMoves(board, r, c, state);
+        if (moves.some(m => m.r === targetR && m.c === targetC)) {
+          attackers.push({ r, c, value: BOT_PIECE_VALUES[p.type], type: p.type });
+        }
+      }
+    }
+    // Sort by value (sacrifice least valuable first)
+    attackers.sort((a, b) => a.value - b.value);
+    return attackers;
+  }
+
+  // Simulate the exchange sequence
+  let gain = [BOT_PIECE_VALUES[target.type]];
+  let boardCopy = snapshot(state.board);
+
+  // First capture
+  boardCopy[targetR][targetC] = attacker;
+  boardCopy[attackerR][attackerC] = null;
+
+  let currentPiece = attacker;
+  let activeColor = opp; // Opponent recaptures next
+
+  // Alternate captures until no more attackers
+  for (let depth = 1; depth < 10; depth++) {
+    const attackers = findAttackers(boardCopy, targetR, targetC, activeColor);
+    if (attackers.length === 0) break;
+
+    // Use least valuable attacker
+    const nextAttacker = attackers[0];
+    gain[depth] = BOT_PIECE_VALUES[currentPiece.type] - gain[depth - 1];
+
+    // Make the capture on the copy
+    currentPiece = boardCopy[nextAttacker.r][nextAttacker.c];
+    boardCopy[nextAttacker.r][nextAttacker.c] = null;
+    boardCopy[targetR][targetC] = currentPiece;
+
+    activeColor = opposite(activeColor);
+  }
+
+  restore(state.board, boardCopy);
+
+  // Negamax the gain array
+  for (let i = gain.length - 1; i > 0; i--) {
+    gain[i - 1] = -Math.max(-gain[i - 1], gain[i]);
+  }
+
+  return gain[0];
+}
+
 // ---------- Alpha-Beta Search (Hard mode) ----------
-// Adaptive depth: 4-6 ply based on game phase with selective extensions.
+// ENHANCED COMPUTATION: Increased depth for stronger play since bot is fast for humans
+// Adaptive depth: 6-8 ply based on game phase with selective extensions.
 // Includes alpha-beta pruning, adaptive null-move pruning, killer moves, LMR,
 // enhanced check extensions, and deep quiescence search. Uses PVS at root.
-// Target: 1-2 seconds per move with effective depth of 5-6 ply via extensions.
-const BOT_BASE_DEPTH = 4; // Base search depth
-const BOT_ROOT_CANDIDATES = 20; // Deep-search top N root moves
+// Target: 2-5 seconds per move with effective depth of 7-9 ply via extensions.
+const BOT_BASE_DEPTH = 6; // Base search depth (increased from 4)
+const BOT_ROOT_CANDIDATES = 25; // Deep-search top N root moves (increased from 20)
 
-// Adaptive depth by game phase
+// Adaptive depth by game phase (ALL INCREASED BY 2 PLY)
 function botGetSearchDepth(state) {
   const turnNumber = state.turnNumber || 0;
 
-  // Opening (turns 1-10): 4-ply (book moves + tactical awareness)
-  if (turnNumber <= 10) return 4;
+  // Opening (turns 1-10): 7-ply (increased from 5 for much stronger opening play)
+  if (turnNumber <= 10) return 7;
 
-  // Middlegame (turns 11-30): 5-ply (complex tactics need depth)
-  if (turnNumber <= 30) return 5;
+  // Middlegame (turns 11-30): 7-ply (increased from 5, sees deep tactics)
+  if (turnNumber <= 30) return 7;
 
-  // Endgame (turns 31+): 6-ply (fewer pieces, can search deeper)
-  return 6;
+  // Endgame (turns 31+): 8-ply (increased from 6, near-perfect endgame play)
+  return 8;
 }
 
 // Killer moves: track moves that caused beta cutoffs at each depth (2 per depth)
-// Increased size for deeper searches
-const BOT_KILLERS = Array.from({ length: 12 }, () => [null, null]);
+// Increased size for deeper searches (now 16 for depth 8+ searches)
+const BOT_KILLERS = Array.from({ length: 16 }, () => [null, null]);
 
 // History heuristic: track which from-to moves are generally good
 const BOT_HISTORY = {};
 
 // Transposition table: cache position evaluations
 // Using Zobrist-style simple position hash
-const BOT_TT_SIZE = 10000;
+// INCREASED SIZE for deeper searches (10k -> 50k entries)
+const BOT_TT_SIZE = 50000;
 const BOT_TT = new Map(); // key: positionHash, value: { score, depth, flag, bestMove }
 const BOT_TT_EXACT = 0;
 const BOT_TT_ALPHA = 1; // Upper bound
 const BOT_TT_BETA = 2;  // Lower bound
 
 function botClearSearchTables() {
-  for (let i = 0; i < 12; i++) BOT_KILLERS[i] = [null, null];
+  for (let i = 0; i < 16; i++) BOT_KILLERS[i] = [null, null];
   for (const k in BOT_HISTORY) delete BOT_HISTORY[k];
   BOT_TT.clear();
 }
@@ -1208,6 +1367,7 @@ function botIsKiller(depth, m) {
 function botOrderScore(state, m, forColor, depth) {
   let s = 0;
   const piece = state.board[m.from.r][m.from.c];
+  if (!piece) return 0; // Safety: invalid move with no piece at source
   const target = state.board[m.to.r][m.to.c];
   // MVV-LVA for captures
   if (target && target.color !== piece.color) {
@@ -1223,9 +1383,25 @@ function botOrderScore(state, m, forColor, depth) {
   // PST improvement
   const phase = botGamePhase(state);
   s += botPieceSquareValue(piece, m.to.r, m.to.c, phase) - botPieceSquareValue(piece, m.from.r, m.from.c, phase);
-  // Fountain move bonus (critical for move ordering)
+
+  // ===== LAYER 5: FOUNTAIN & CENTER FIGHTING =====
+  // Fountain occupation (worth +2 aether/turn)
   if (state.fountains.some(f => f.r === m.to.r && f.c === m.to.c)) {
-    s += 30; // bonus for moves landing on fountains
+    s += 300; // Very high priority! Worth ~3 pawns in move ordering
+    // Even higher if capturing on fountain
+    if (target && target.color !== piece.color) {
+      s += 400; // Kick opponent off fountain!
+    }
+  }
+
+  // Center occupation (worth +1 aether/turn)
+  const centerSquares = [{r:4,c:3},{r:4,c:4},{r:3,c:3},{r:3,c:4}];
+  if (centerSquares.some(sq => sq.r === m.to.r && sq.c === m.to.c)) {
+    s += 200; // High priority
+    // Even higher if capturing on center
+    if (target && target.color !== piece.color) {
+      s += 300; // Kick opponent out of center!
+    }
   }
   // King aggression in endgame
   if (phase < 0.5 && piece.type !== PIECE.KING) {
@@ -1238,12 +1414,13 @@ function botOrderScore(state, m, forColor, depth) {
   return s;
 }
 
-// Root-level move ordering: includes safety checks (isSquareAttacked).
+// Root-level move ordering: includes safety checks (isSquareAttacked + SEE).
 // Only called once at the root, so cost is acceptable.
 function botRootOrderScore(state, m, forColor) {
   let s = botOrderScore(state, m, forColor);
   const opp = opposite(forColor);
   const piece = state.board[m.from.r][m.from.c];
+  if (!piece) return 0; // Safety: invalid move with no piece at source
   const target = state.board[m.to.r][m.to.c];
 
   // Fountain priority at root level (strategic control)
@@ -1252,19 +1429,27 @@ function botRootOrderScore(state, m, forColor) {
   }
 
   if (target && target.color !== piece.color) {
-    // Penalize capturing into a defended square with a more valuable piece
-    if (BOT_PIECE_VALUES[piece.type] > BOT_PIECE_VALUES[target.type]) {
-      if (isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
-        s -= 5000; // likely losing exchange
-      }
+    // USE SEE to evaluate capture safety (more accurate than simple attack checks)
+    const seeScore = botSEE(state, m.to.r, m.to.c, m.from.r, m.from.c, forColor);
+
+    // SEE negative = we lose material in the exchange
+    if (seeScore < 0) {
+      s += seeScore * 10; // Heavy penalty for bad trades
+    } else if (seeScore > 0) {
+      s += seeScore * 2; // Bonus for winning trades
     }
+    // If SEE == 0, it's an even trade, keep base MVV-LVA score
   } else {
     // Non-capture: penalize moving to an attacked square (hanging piece)
     if (piece.type !== PIECE.PAWN && isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
       if (!isSquareAttacked(state.board, m.to.r, m.to.c, forColor)) {
         s -= BOT_PIECE_VALUES[piece.type] * 3; // heavy penalty: piece will be lost
       } else if (BOT_PIECE_VALUES[piece.type] > 320) {
-        s -= 200; // slight penalty for trading
+        // Check SEE for moving into a contested square
+        const seeScore = botSEE(state, m.to.r, m.to.c, m.from.r, m.from.c, forColor);
+        if (seeScore < 0) {
+          s -= BOT_PIECE_VALUES[piece.type]; // Penalize if SEE says we'll lose the piece
+        }
       }
     }
   }
@@ -1473,9 +1658,9 @@ function botQuiesce(state, alpha, beta, forColor, qDepth, lastCaptureSquare) {
   const DELTA = 975; // queen value + margin
   if (standPat + DELTA < alpha) return alpha;
 
-  // REDUCED max quiescence depth: 6 (from 8) to prevent stack overflow
-  // Combined with MAX_PLY=10, total depth is 16 which is safe
-  if (qDepth >= 6) return standPat;
+  // Max quiescence depth: 12 (increased from 8 for even deeper tactical vision)
+  // Combined with base depth 7-8, total effective depth can reach 19-20 ply in critical lines
+  if (qDepth >= 12) return standPat;
 
   const opp = opposite(forColor);
   const moves = allLegalMoves(state.board, forColor, state);
@@ -1612,7 +1797,7 @@ function botSearchBestMove(state, moves, forColor) {
   let bestScore = -Infinity;
 
   const startTime = Date.now();
-  const maxTime = 1800; // Increased time budget to 1.8s for deeper searches
+  const maxTime = 4000; // Increased time budget to 4s for much deeper searches (from 1.8s)
 
   // ADAPTIVE DEPTH BY GAME PHASE
   const maxDepth = botGetSearchDepth(state);
@@ -1641,6 +1826,11 @@ function botSearchBestMove(state, moves, forColor) {
       moveIdx++;
       const snap = snapshot(state.board);
       const piece = state.board[m.from.r][m.from.c];
+      if (!piece) {
+        // Safety: skip invalid moves where source square has no piece
+        restore(state.board, snap);
+        continue;
+      }
       const moveInfo = { r: m.to.r, c: m.to.c, capture: m.move.capture, castle: m.move.castle, enPassant: m.move.enPassant };
       applyMoveRaw(state.board, m.from.r, m.from.c, moveInfo, state);
       if (piece && piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) {
@@ -1698,6 +1888,589 @@ function botSearchBestMove(state, moves, forColor) {
   return bestMove;
 }
 
+// ===== LAYER 2: SMART TRADING SYSTEM =====
+function botEvaluateTrade(myPiece, theirPiece, myAether, oppAether) {
+  const myMaterialLoss = BOT_PIECE_VALUES[myPiece.type];
+  const theirMaterialLoss = BOT_PIECE_VALUES[theirPiece.type];
+  const materialDiff = theirMaterialLoss - myMaterialLoss;
+
+  // Aether compensation: losing piece hurts less if you're high on aether
+  let aetherCompensation = 0;
+  if (myAether >= 20) {
+    aetherCompensation = 50; // Have resources for powers
+  }
+  if (myAether >= 28) {
+    aetherCompensation = 100; // Can afford any power
+  }
+
+  // Opponent's aether threat: trading down is good if opponent is high on aether
+  let aetherThreat = 0;
+  if (oppAether >= 18 && myPiece.type === PIECE.QUEEN) {
+    aetherThreat = -150; // They can Vengeance your Queen!
+  }
+  if (oppAether >= 14 && theirPiece.type === PIECE.QUEEN) {
+    aetherThreat = 100; // Remove their Queen before they shield it
+  }
+
+  return materialDiff + aetherCompensation + aetherThreat;
+}
+
+// ===== LAYER 3: POWER COMBO SYSTEM =====
+function botEvaluatePowerCombos(state, forColor) {
+  const aether = state.mana[forColor];
+  const combos = [];
+
+  // Shield + Attack combo
+  if (aether >= 14) { // FORTIFY cost
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
+      if (p.shieldHP > 0) continue; // Already shielded
+
+      const moves = legalMoves(state.board, r, c, state);
+      const profitableAttacks = moves.filter(m => {
+        const target = state.board[m.r][m.c];
+        return target && target.color !== forColor && BOT_PIECE_VALUES[target.type] >= 300;
+      });
+
+      if (profitableAttacks.length > 0) {
+        combos.push({ type: 'SHIELD_ATTACK', priority: 200, piece: {r, c}, attacks: profitableAttacks });
+      }
+    }
+  }
+
+  // Double Attack combo (ALWAYS HIGH PRIORITY when 2+ captures available)
+  if (aether >= 14) { // DOUBLE_ATTACK cost
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (!p || p.color !== forColor || p.type === PIECE.KING) continue;
+      if (p.isSpectral) continue;
+      if (p.frozenUntil && p.frozenUntil > state.turnNumber) continue;
+
+      const firstMoves = legalMoves(state.board, r, c, state);
+      const firstCaptures = firstMoves.filter(m => m.capture);
+
+      // Check if after first capture, we can make a second capture
+      for (const m1 of firstCaptures) {
+        const target1 = state.board[m1.r][m1.c];
+        if (!target1 || target1.shieldHP > 0) continue; // Skip shielded
+
+        // Simulate first move
+        const snap = snapshot(state.board);
+        state.board[m1.r][m1.c] = p;
+        state.board[r][c] = null;
+
+        const secondMoves = legalMoves(state.board, m1.r, m1.c, state);
+        const secondCaptures = secondMoves.filter(m =>
+          m.capture && !(m.r === m1.r && m.c === m1.c) // Not same square
+        );
+
+        restore(state.board, snap);
+
+        if (secondCaptures.length > 0) {
+          // Can capture first target, then capture another!
+          combos.push({
+            type: 'DOUBLE_ATTACK',
+            priority: 300,
+            from: {r, c},
+            targets: [m1, secondCaptures[0]] // First capture and best second capture
+          });
+          break; // Found a combo, no need to check other first moves
+        }
+      }
+
+      // Or: break shield + capture same piece
+      const shieldedTargets = firstCaptures.filter(m => {
+        const target = state.board[m.r][m.c];
+        return target && target.shieldHP > 0;
+      });
+      if (shieldedTargets.length > 0) {
+        combos.push({ type: 'DOUBLE_ATTACK_SHIELD', priority: 250, from: {r, c}, targets: shieldedTargets });
+      }
+
+      // ALTERNATE: If piece has 2+ capture options from current position, consider Double Attack
+      // This is less selective but catches more opportunities
+      if (firstCaptures.length >= 2) {
+        const unshieldedCaptures = firstCaptures.filter(m => {
+          const t = state.board[m.r][m.c];
+          return t && t.shieldHP === 0;
+        });
+        if (unshieldedCaptures.length >= 2) {
+          const totalValue = unshieldedCaptures.slice(0, 2).reduce((sum, m) =>
+            sum + BOT_PIECE_VALUES[state.board[m.r][m.c].type], 0
+          );
+          if (totalValue >= 300) { // At least minor piece value
+            combos.push({
+              type: 'DOUBLE_ATTACK',
+              priority: 200 + totalValue * 0.3,
+              from: {r, c},
+              targets: [unshieldedCaptures[0], unshieldedCaptures[1]]
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Imprison + Attack combo
+  if (aether >= 14) { // IMPRISON cost
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const defender = state.board[r][c];
+      if (!defender || defender.color === forColor || defender.type === PIECE.KING) continue;
+      if (defender.isSpectral) continue;
+
+      // Check if imprisoning this piece enables capturing a high-value piece
+      const protectedPieces = [];
+      for (let pr = 0; pr < 8; pr++) for (let pc = 0; pc < 8; pc++) {
+        const protected = state.board[pr][pc];
+        if (!protected || protected.color === forColor) continue;
+        if (BOT_PIECE_VALUES[protected.type] >= 500) { // Queen or high value
+          // Check if defender protects this square
+          const defMoves = legalMoves(state.board, r, c, state);
+          if (defMoves.some(m => m.r === pr && m.c === pc)) {
+            protectedPieces.push({r: pr, c: pc});
+          }
+        }
+      }
+
+      if (protectedPieces.length > 0) {
+        combos.push({ type: 'IMPRISON_ATTACK', priority: 220, defender: {r, c}, targets: protectedPieces });
+      }
+    }
+  }
+
+  return combos;
+}
+
+// ===== LAYER 6: TACTICAL PATTERN RECOGNITION =====
+// Advanced tactical pattern detector - recognizes chess tactics enhanced with powers
+function botDetectTacticalPatterns(state, forColor) {
+  const patterns = [];
+  const opp = opposite(forColor);
+
+  // Pattern 1: FORK - Piece attacks 2+ valuable targets
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = state.board[r][c];
+      if (!piece || piece.color !== forColor || piece.isSpectral) continue;
+      if (piece.imprisoned || (piece.frozenUntil && piece.frozenUntil > state.turnNumber)) continue;
+
+      const moves = legalMoves(state.board, r, c, state);
+      for (const move of moves) {
+        // Simulate move to new square
+        const snap = snapshot(state.board);
+        const captured = state.board[move.r][move.c];
+        state.board[move.r][move.c] = piece;
+        state.board[r][c] = null;
+
+        // Check what this piece now attacks
+        const attacks = typeof getAttackSquares === 'function' ?
+          getAttackSquares(state.board, move.r, move.c) : [];
+
+        const highValueTargets = attacks.filter(sq => {
+          const target = state.board[sq.r][sq.c];
+          return target && target.color === opp &&
+                 BOT_PIECE_VALUES[target.type] >= 300 && // Knight or better
+                 !target.isSpectral;
+        });
+
+        restore(state.board, snap);
+
+        if (highValueTargets.length >= 2) {
+          const totalValue = highValueTargets.reduce((sum, t) =>
+            sum + BOT_PIECE_VALUES[state.board[t.r][t.c].type], 0);
+
+          patterns.push({
+            type: 'FORK',
+            piece: {r, c},
+            forkSquare: {r: move.r, c: move.c},
+            targets: highValueTargets,
+            value: totalValue,
+            powerEnhancement: 'FORTIFY', // Shield forking piece
+            enhancedValue: totalValue + 200
+          });
+        }
+      }
+    }
+  }
+
+  // Pattern 2: PIN - Long-range piece attacks through one piece to more valuable target
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const piece = state.board[r][c];
+      if (!piece || piece.color !== forColor || piece.isSpectral) continue;
+      if (![PIECE.ROOK, PIECE.BISHOP, PIECE.QUEEN].includes(piece.type)) continue;
+
+      const directions = piece.type === PIECE.ROOK ?
+        [[1,0],[-1,0],[0,1],[0,-1]] :
+        piece.type === PIECE.BISHOP ?
+        [[1,1],[1,-1],[-1,1],[-1,-1]] :
+        [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+
+      for (const [dr, dc] of directions) {
+        let pinnedPiece = null;
+        let behindPiece = null;
+
+        for (let i = 1; i < 8; i++) {
+          const nr = r + dr * i;
+          const nc = c + dc * i;
+          if (!inBounds(nr, nc)) break;
+
+          const target = state.board[nr][nc];
+          if (!target) continue;
+
+          if (!pinnedPiece) {
+            if (target.color === opp) pinnedPiece = {r: nr, c: nc, piece: target};
+          } else if (!behindPiece) {
+            if (target.color === opp) {
+              behindPiece = {r: nr, c: nc, piece: target};
+
+              if (BOT_PIECE_VALUES[behindPiece.piece.type] >
+                  BOT_PIECE_VALUES[pinnedPiece.piece.type] + 200) {
+                patterns.push({
+                  type: 'PIN',
+                  attacker: {r, c},
+                  pinned: pinnedPiece,
+                  behind: behindPiece,
+                  value: BOT_PIECE_VALUES[behindPiece.piece.type] - BOT_PIECE_VALUES[pinnedPiece.piece.type],
+                  powerEnhancement: 'IMPRISON', // Imprison pinned piece
+                  enhancedValue: BOT_PIECE_VALUES[behindPiece.piece.type] + 150
+                });
+              }
+            }
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Pattern 3: OVERLOADED DEFENDER - One piece defends multiple targets
+  const oppPieces = [];
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (p && p.color === opp && !p.isSpectral) {
+        oppPieces.push({r, c, piece: p});
+      }
+    }
+  }
+
+  for (const defender of oppPieces) {
+    const defMoves = legalMoves(state.board, defender.r, defender.c, state);
+    const defends = [];
+
+    for (const dm of defMoves) {
+      const target = state.board[dm.r][dm.c];
+      if (target && target.color === opp && BOT_PIECE_VALUES[target.type] >= 300) {
+        // Check if target is attacked by us
+        let attackedByUs = false;
+        for (let ar = 0; ar < 8; ar++) {
+          for (let ac = 0; ac < 8; ac++) {
+            const attacker = state.board[ar][ac];
+            if (!attacker || attacker.color !== forColor) continue;
+            const attacks = legalMoves(state.board, ar, ac, state);
+            if (attacks.some(a => a.r === dm.r && a.c === dm.c)) {
+              attackedByUs = true;
+              break;
+            }
+          }
+          if (attackedByUs) break;
+        }
+
+        if (attackedByUs) {
+          defends.push({r: dm.r, c: dm.c, piece: target});
+        }
+      }
+    }
+
+    if (defends.length >= 2) {
+      const totalValue = defends.reduce((sum, d) => sum + BOT_PIECE_VALUES[d.piece.type], 0);
+      patterns.push({
+        type: 'OVERLOADED_DEFENDER',
+        defender: defender,
+        targets: defends,
+        value: totalValue * 0.5, // Can only win one
+        powerEnhancement: 'IMPRISON', // Remove the overloaded defender
+        enhancedValue: totalValue // Can now win both!
+      });
+    }
+  }
+
+  return patterns;
+}
+
+// ===== LAYER 7: THREAT EVALUATION ENGINE =====
+// Multi-move threat calculation - what can opponent do?
+function botEvaluateThreats(state, forColor) {
+  const opp = opposite(forColor);
+  const oppAether = state.mana[opp];
+  const threats = [];
+
+  // Threat 1: Vengeance on our high-value pieces
+  if (oppAether >= POWER_COSTS[POWER.VENGEANCE]) {
+    const ourQueen = findPiece(state.board, forColor, PIECE.QUEEN);
+    if (ourQueen) {
+      const threat = {
+        type: 'VENGEANCE_THREAT',
+        target: ourQueen,
+        probability: oppAether >= 20 ? 0.9 : oppAether >= 18 ? 0.7 : 0.4,
+        impact: -900,
+        urgency: 'HIGH',
+        counter: 'MOVE_QUEEN_DEFENSIVELY'
+      };
+      threats.push(threat);
+    }
+
+    // Also check for Rook threats
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (p && p.color === forColor && p.type === PIECE.ROOK) {
+          threats.push({
+            type: 'VENGEANCE_THREAT',
+            target: {r, c},
+            probability: oppAether >= 20 ? 0.6 : 0.3,
+            impact: -500,
+            urgency: 'MEDIUM',
+            counter: 'ACTIVATE_ROOK'
+          });
+        }
+      }
+    }
+  }
+
+  // Threat 2: Double Attack fork potential
+  if (oppAether >= POWER_COSTS[POWER.DOUBLE_ATTACK]) {
+    const oppPieces = [];
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (p && p.color === opp && !p.isSpectral && !p.imprisoned) {
+          oppPieces.push({r, c, piece: p});
+        }
+      }
+    }
+
+    for (const oppPiece of oppPieces) {
+      const moves = legalMoves(state.board, oppPiece.r, oppPiece.c, state);
+      for (const move of moves) {
+        if (!move.capture) continue;
+
+        const target1 = state.board[move.r][move.c];
+        if (!target1 || target1.color !== forColor) continue;
+
+        // Simulate opponent capturing
+        const snap = snapshot(state.board);
+        state.board[move.r][move.c] = oppPiece.piece;
+        state.board[oppPiece.r][oppPiece.c] = null;
+
+        const secondCaptures = legalMoves(state.board, move.r, move.c, state)
+          .filter(m => m.capture && m.r !== move.r && m.c !== move.c);
+
+        restore(state.board, snap);
+
+        if (secondCaptures.length > 0) {
+          const totalValue = BOT_PIECE_VALUES[target1.type] +
+                           BOT_PIECE_VALUES[state.board[secondCaptures[0].r][secondCaptures[0].c].type];
+
+          if (totalValue >= 400) {
+            threats.push({
+              type: 'DOUBLE_ATTACK_THREAT',
+              probability: oppAether >= 16 ? 0.7 : 0.4,
+              impact: -totalValue,
+              urgency: 'HIGH',
+              counter: 'SEPARATE_TARGETS'
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Threat 3: Imprison + Capture combo
+  if (oppAether >= POWER_COSTS[POWER.IMPRISON]) {
+    // Check if any of our pieces are defending high-value pieces
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const defender = state.board[r][c];
+        if (!defender || defender.color !== forColor) continue;
+
+        const defMoves = legalMoves(state.board, r, c, state);
+        for (const dm of defMoves) {
+          const protected = state.board[dm.r][dm.c];
+          if (!protected || protected.color !== forColor) continue;
+          if (BOT_PIECE_VALUES[protected.type] < 500) continue; // Only care about Queen+
+
+          // Check if opponent attacks protected piece
+          let oppAttacksProtected = false;
+          for (let or = 0; or < 8; or++) {
+            for (let oc = 0; oc < 8; oc++) {
+              const opp = state.board[or][oc];
+              if (!opp || opp.color === forColor) continue;
+              const oppMoves = legalMoves(state.board, or, oc, state);
+              if (oppMoves.some(m => m.r === dm.r && m.c === dm.c)) {
+                oppAttacksProtected = true;
+                break;
+              }
+            }
+            if (oppAttacksProtected) break;
+          }
+
+          if (oppAttacksProtected) {
+            threats.push({
+              type: 'IMPRISON_THREAT',
+              defender: {r, c},
+              protected: {r: dm.r, c: dm.c, piece: protected},
+              probability: 0.5,
+              impact: -BOT_PIECE_VALUES[protected.type],
+              urgency: 'MEDIUM',
+              counter: 'ADD_SECOND_DEFENDER'
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Sort by expected impact
+  return threats.sort((a, b) =>
+    (b.probability * Math.abs(b.impact)) - (a.probability * Math.abs(a.impact))
+  );
+}
+
+// ===== LAYER 8: MULTI-MOVE COMBO GENERATOR =====
+// Generate 2-3 move power sequences for maximum effectiveness
+function botGeneratePowerSequences(state, forColor, horizon = 2) {
+  const sequences = [];
+  const aether = state.mana[forColor];
+  const opp = opposite(forColor);
+
+  // Sequence 1: FORTIFY → CAPTURE → PROMOTE
+  // Shield a piece, use it to win material, then promote
+  if (aether >= 14 + 15) { // Fortify + Promote
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const piece = state.board[r][c];
+        if (!piece || piece.color !== forColor || piece.shieldHP > 0) continue;
+
+        // Check if piece can capture something valuable
+        const moves = legalMoves(state.board, r, c, state);
+        const goodCaptures = moves.filter(m => {
+          const target = state.board[m.r][m.c];
+          return target && target.color === opp &&
+                 BOT_PIECE_VALUES[target.type] >= BOT_PIECE_VALUES[piece.type] - 100;
+        });
+
+        if (goodCaptures.length > 0) {
+          // After capture, check if we have promotable pawn
+          const ourPawns = [];
+          for (let pr = 0; pr < 8; pr++) {
+            for (let pc = 0; pc < 8; pc++) {
+              const p = state.board[pr][pc];
+              if (p && p.color === forColor && p.type === PIECE.PAWN) {
+                const rank = forColor === 'white' ? pr : 7 - pr;
+                if (rank >= 5) { // 6th or 7th rank
+                  ourPawns.push({r: pr, c: pc});
+                }
+              }
+            }
+          }
+
+          if (ourPawns.length > 0) {
+            const captureValue = BOT_PIECE_VALUES[state.board[goodCaptures[0].r][goodCaptures[0].c].type];
+            sequences.push({
+              type: 'FORTIFY_CAPTURE_PROMOTE',
+              moves: [
+                { power: 'FORTIFY', target: {r, c} },
+                { action: 'CAPTURE', from: {r, c}, to: goodCaptures[0] },
+                { power: 'PROMOTE', target: ourPawns[0] }
+              ],
+              value: captureValue + 500, // Net material gain
+              aetherCost: 14 + 15,
+              priority: 400
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Sequence 2: IMPRISON → CAPTURE_HIGH_VALUE
+  // Already handled in combo detection, but add here for completeness
+
+  // Sequence 3: FROST → REPOSITION → ATTACK
+  // Freeze opponent's threats, reposition safely, then attack
+  if (aether >= POWER_COSTS[POWER.FROST]) {
+    const oppThreats = [];
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const oppPiece = state.board[r][c];
+        if (!oppPiece || oppPiece.color === forColor) continue;
+        if (oppPiece.frozenUntil && oppPiece.frozenUntil > state.turnNumber) continue;
+
+        const oppMoves = legalMoves(state.board, r, c, state);
+        const attacksUs = oppMoves.filter(m => {
+          const target = state.board[m.r][m.c];
+          return target && target.color === forColor &&
+                 BOT_PIECE_VALUES[target.type] >= 300;
+        });
+
+        if (attacksUs.length > 0) {
+          oppThreats.push({r, c, piece: oppPiece, threatens: attacksUs});
+        }
+      }
+    }
+
+    if (oppThreats.length > 0) {
+      sequences.push({
+        type: 'FROST_REPOSITION_ATTACK',
+        moves: [
+          { power: 'FROST', target: oppThreats[0] }
+        ],
+        value: 200, // Defensive value
+        aetherCost: POWER_COSTS[POWER.FROST],
+        priority: 250
+      });
+    }
+  }
+
+  return sequences.sort((a, b) => b.priority - a.priority);
+}
+
+// ===== LAYER 4: ANTI-VENGEANCE-HOARDING =====
+function botDynamicPowerSelection(state, forColor) {
+  const aether = state.mana[forColor];
+  const opp = opposite(forColor);
+  const materialAdvantage = botCountMaterial(state, forColor) - botCountMaterial(state, opp);
+
+  // OFFENSIVE PRIORITY (ahead in material, push advantage)
+  if (materialAdvantage > 300 && aether >= 14) {
+    // We're winning - use aether aggressively
+    return { recommendedPowers: ['DOUBLE_ATTACK', 'IMPRISON', 'FORTIFY'], threshold: 14 };
+  }
+
+  // DEFENSIVE PRIORITY (behind in material, stabilize)
+  if (materialAdvantage < -200) {
+    // We're losing - focus on survival and counter-play
+    if (aether >= 18) return { recommendedPowers: ['VENGEANCE'], threshold: 18 };
+    if (aether >= 16) return { recommendedPowers: ['AETHER_BLOCK'], threshold: 16 };
+    if (aether >= 14) return { recommendedPowers: ['FORTIFY', 'CLEANSE'], threshold: 14 };
+  }
+
+  // TACTICAL PRIORITY (even game, look for tactical shots)
+  if (Math.abs(materialAdvantage) <= 200 && aether >= 14) {
+    return { recommendedPowers: ['DOUBLE_ATTACK', 'IMPRISON'], threshold: 14 };
+  }
+
+  // DEFAULT: Don't hoard - spend at 20+ aether
+  if (aether >= 25) {
+    return { recommendedPowers: ['ANY'], threshold: 14, urgent: true };
+  }
+
+  return { recommendedPowers: [], threshold: 0, urgent: false };
+}
+
 // ---------- Power Decision ----------
 // Returns an action object { type: 'power', exec: fn } or null
 function botConsiderPowers(state, forColor) {
@@ -1706,6 +2479,142 @@ function botConsiderPowers(state, forColor) {
   const opp = opposite(forColor);
   const phase = botGamePhase(state);
   const candidates = [];
+
+  // ===== LAYER 4: ANTI-HOARDING CHECK =====
+  const powerStrategy = botDynamicPowerSelection(state, forColor);
+
+  // ===== LAYER 3: POWER COMBO DETECTION =====
+  const combos = botEvaluatePowerCombos(state, forColor);
+  if (combos.length > 0) {
+    console.log(`[BOT] Found ${combos.length} combos:`, combos.map(c => c.type));
+  }
+  for (const combo of combos) {
+    if (combo.type === 'DOUBLE_ATTACK' && combo.targets.length >= 2) {
+      // High priority combo - can capture 2 pieces
+      candidates.push({
+        priority: combo.priority,
+        exec: () => {
+          const target1 = combo.targets[0];
+          const target2 = combo.targets[1];
+          return castDoubleAttack(state, combo.from.r, combo.from.c, target1.r, target1.c, target2.r, target2.c);
+        },
+        name: 'DOUBLE_ATTACK_COMBO',
+        payload: { power: 'DOUBLE_ATTACK', from: combo.from, targets: combo.targets }
+      });
+    } else if (combo.type === 'DOUBLE_ATTACK_SHIELD' && combo.targets.length > 0) {
+      // Break shield + capture same piece
+      const target = combo.targets[0];
+      candidates.push({
+        priority: combo.priority,
+        exec: () => castDoubleAttack(state, combo.from.r, combo.from.c, target.r, target.c, target.r, target.c),
+        name: 'DOUBLE_ATTACK_SHIELD',
+        payload: { power: 'DOUBLE_ATTACK', from: combo.from, target }
+      });
+    } else if (combo.type === 'SHIELD_ATTACK' && combo.attacks.length > 0) {
+      // Shield piece then attack
+      candidates.push({
+        priority: combo.priority,
+        exec: () => castFortify(state, combo.piece.r, combo.piece.c),
+        name: 'SHIELD_ATTACK_COMBO',
+        payload: { power: 'FORTIFY', piece: combo.piece }
+      });
+    }
+    // Note: IMPRISON_ATTACK combo is more complex - let regular Imprison logic handle it
+  }
+
+  // ===== LAYER 6-8: ADVANCED TACTICAL INTELLIGENCE =====
+  const tacticalPatterns = botDetectTacticalPatterns(state, forColor);
+  const threats = botEvaluateThreats(state, forColor);
+  const powerSequences = botGeneratePowerSequences(state, forColor);
+
+  // Analysis logging
+  if (aether >= 14) {
+    console.error(`[T${state.turnNumber}:${forColor[0]}] A=${aether} Pat=${tacticalPatterns.length} Thr=${threats.length}`);
+  }
+
+  // Add tactical pattern-based candidates (BOOSTED PRIORITIES)
+  for (const pattern of tacticalPatterns) {
+    if (pattern.type === 'FORK' && aether >= POWER_COSTS[POWER.FORTIFY]) {
+      // Shield the forking piece for safe fork
+      candidates.push({
+        priority: pattern.enhancedValue * 1.5 + 300, // HUGE BOOST
+        exec: () => castFortify(state, pattern.piece.r, pattern.piece.c),
+        name: 'TACTICAL_FORK_SHIELD',
+        payload: { power: 'FORTIFY', pattern: pattern }
+      });
+    } else if (pattern.type === 'PIN' && aether >= POWER_COSTS[POWER.IMPRISON]) {
+      // Imprison the pinned piece to win the behind piece
+      candidates.push({
+        priority: pattern.enhancedValue * 1.5 + 300, // HUGE BOOST
+        exec: () => castImprison(state, pattern.pinned.r, pattern.pinned.c),
+        name: 'TACTICAL_PIN_IMPRISON',
+        payload: { power: 'IMPRISON', pattern: pattern }
+      });
+    } else if (pattern.type === 'OVERLOADED_DEFENDER' && aether >= POWER_COSTS[POWER.IMPRISON]) {
+      // Remove overloaded defender to win multiple pieces
+      candidates.push({
+        priority: pattern.enhancedValue * 2.0 + 500, // MASSIVE BOOST
+        exec: () => castImprison(state, pattern.defender.r, pattern.defender.c),
+        name: 'TACTICAL_OVERLOAD_IMPRISON',
+        payload: { power: 'IMPRISON', pattern: pattern }
+      });
+    }
+  }
+
+  // Add power sequence-based candidates
+  for (const sequence of powerSequences) {
+    if (sequence.type === 'FORTIFY_CAPTURE_PROMOTE' && aether >= sequence.aetherCost) {
+      // Multi-move tactical sequence
+      candidates.push({
+        priority: sequence.priority * 1.2, // Boost multi-move tactics
+        exec: () => castFortify(state, sequence.moves[0].target.r, sequence.moves[0].target.c),
+        name: 'TACTICAL_SEQUENCE_START',
+        payload: { power: 'FORTIFY', sequence: sequence }
+      });
+    } else if (sequence.type === 'FROST_REPOSITION_ATTACK' && aether >= sequence.aetherCost) {
+      candidates.push({
+        priority: sequence.priority,
+        exec: () => castFrost(state, sequence.moves[0].target.r, sequence.moves[0].target.c),
+        name: 'TACTICAL_FROST_DEFENSE',
+        payload: { power: 'FROST', sequence: sequence }
+      });
+    }
+  }
+
+  // Respond to critical threats
+  const criticalThreat = threats.find(t => t.urgency === 'HIGH' && t.probability > 0.7);
+  if (criticalThreat) {
+    console.log(`[BOT INTELLIGENCE] Critical threat detected: ${criticalThreat.type}`);
+
+    if (criticalThreat.type === 'VENGEANCE_THREAT' && aether >= POWER_COSTS[POWER.BLINK]) {
+      // Blink Queen/Rook to safety
+      const target = criticalThreat.target;
+      const piece = state.board[target.r][target.c];
+      if (piece) {
+        const safeMoves = legalMoves(state.board, target.r, target.c, state).filter(m => {
+          // Check if destination is safe
+          const snap = snapshot(state.board);
+          state.board[m.r][m.c] = piece;
+          state.board[target.r][target.c] = null;
+          const safe = !isSquareAttacked(state.board, m.r, m.c, opp);
+          restore(state.board, snap);
+          return safe;
+        });
+
+        if (safeMoves.length > 0) {
+          candidates.push({
+            priority: 600, // Very high priority - save Queen!
+            exec: () => castBlink(state, target.r, target.c, safeMoves[0].r, safeMoves[0].c),
+            name: 'THREAT_RESPONSE_BLINK',
+            payload: { power: 'BLINK', threat: criticalThreat }
+          });
+        }
+      }
+    }
+  }
+
+  // If hoarding past 25 aether, boost ALL power priorities to force spending
+  const hoardingMultiplier = (powerStrategy.urgent && aether >= 25) ? 1.5 : 1.0;
 
   // VENGEANCE: Destroy the most valuable enemy piece — TOP PRIORITY
   // This is the most impactful power for gaining/converting advantage.
@@ -1752,6 +2661,15 @@ function botConsiderPowers(state, forColor) {
       if (p.imprisoned && p.imprisoned.color === forColor) {
         val += BOT_PIECE_VALUES[p.imprisoned.type] * 0.7;
       }
+
+      // FIX 5: HUGE VALUE for destroying ENEMY pawns on 7th rank with Vengeance
+      if (p.type === PIECE.PAWN) {
+        const distToPromo = p.color === COLOR.WHITE ? r : (7 - r);
+        if (distToPromo === 1) {
+          val += 750; // Critical - destroy pawn about to promote!
+        }
+      }
+
       if (val > bestVal) { bestVal = val; bestTarget = { r, c }; }
     }
     // In endgame, use on ANY piece to strip defenses. In middlegame, target high-value.
@@ -1760,7 +2678,7 @@ function botConsiderPowers(state, forColor) {
       // OPTIMIZED: Scale by game phase and material balance
       let prio;
       if (materialBalance > 300) {
-        // We're ahead: lower priority (0.2), save aether
+        // We're ahead: lower priority (0.2), save aether UNLESS hoarding
         prio = bestVal * 0.20;
       } else if (materialBalance < -200) {
         // We're behind: higher priority (0.4), desperate for material
@@ -1769,6 +2687,10 @@ function botConsiderPowers(state, forColor) {
         // Balanced: medium priority
         prio = bestVal * (phase < 0.5 ? 0.32 : 0.27);
       }
+
+      // LAYER 4: Apply anti-hoarding multiplier
+      prio *= hoardingMultiplier;
+
       candidates.push({
         priority: prio,
         exec: () => castVengeance(state, bestTarget.r, bestTarget.c),
@@ -1923,13 +2845,22 @@ function botConsiderPowers(state, forColor) {
         }
       }
     }
-    // Use on knights (320+) and above — imprison is powerful since piece is removed from play
-    if (bestImprison && bestImpVal >= 250) {
-      // OPTIMIZED: Scale down if we're far ahead (save aether)
-      let prio = bestImpVal * 0.22;
+    // EXTREMELY AGGRESSIVE: Use even for minor pieces (150+)
+    // Massive priority boost to make bot actually use this power!
+
+    if (aether >= 14) {
+      console.error(`  IMP check: val=${bestImpVal||0} found=${bestImprison?'Y':'N'}`);
+    }
+
+    if (bestImprison && bestImpVal >= 150) {
+      // HUGE priority boost - make this competitive with Promote/Vengeance
+      let prio = bestImpVal * 0.60 + 250; // MASSIVE boost + high base priority
       if (materialBalance > 500) {
-        prio *= 0.8; // Scale down when ahead
+        prio *= 0.95; // Almost no scaling down
       }
+
+      console.error(`  ✓✓ IMP CANDIDATE prio=${prio.toFixed(0)}`);
+
       candidates.push({
         priority: prio,
         exec: () => castImprison(state, bestImprison.captorR, bestImprison.captorC, bestImprison.captiveR, bestImprison.captiveC),
@@ -2111,6 +3042,15 @@ function botConsiderPowers(state, forColor) {
           }
         }
       }
+
+      // FIX 4: HUGE PRIORITY for freezing ENEMY pawns on 7th rank
+      if (p.type === PIECE.PAWN) {
+        const distToPromo = p.color === COLOR.WHITE ? r : (7 - r);
+        if (distToPromo === 1) {
+          frostScore += 700; // Emergency - enemy pawn about to promote!
+        }
+      }
+
       if (frostScore > bestScore) { bestScore = frostScore; bestTarget = { r, c }; }
     }
     const threshold = phase < 0.5 ? 200 : 350;
@@ -2273,7 +3213,7 @@ function botConsiderPowers(state, forColor) {
 
       if (threatened || strategic) {
         candidates.push({
-          priority: bestVal * 0.10,
+          priority: bestVal * 0.25 + 150, // HUGE BOOST to make bot use Fortify more
           exec: () => castFortify(state, bestPiece.r, bestPiece.c),
           name: 'FORTIFY',
           payload: { power: 'FORTIFY', r: bestPiece.r, c: bestPiece.c }
@@ -2566,8 +3506,10 @@ function botConsiderPowers(state, forColor) {
   }
 
   // DOUBLE ATTACK: Free material evaluation - two captures or capture + reposition
-  if (aether >= POWER_COSTS[POWER.DOUBLE_ATTACK] && !isInCheck(state.board, forColor)) {
+  const daEnabled = aether >= POWER_COSTS[POWER.DOUBLE_ATTACK] && !isInCheck(state.board, forColor);
+  if (daEnabled) {
     let bestDA = null, bestDAScore = 0;
+    let daOpportunities = 0;
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
       if (!p || p.color !== forColor || p.type === PIECE.KING || p.isSpectral) continue;
@@ -2638,6 +3580,7 @@ function botConsiderPowers(state, forColor) {
         restore(state.board, snap);
         if (bestSecondMove) {
           const totalVal = captureVal + bestSecondVal;
+          daOpportunities++;
           if (totalVal > bestDAScore) {
             bestDAScore = totalVal;
             bestDA = { fromR: r, fromC: c, toR: m1.r, toC: m1.c, jumpR: bestSecondMove.r, jumpC: bestSecondMove.c };
@@ -2645,10 +3588,20 @@ function botConsiderPowers(state, forColor) {
         }
       }
     }
-    // Double attack is worth it if we can capture a good piece (knight+)
-    if (bestDA && bestDAScore >= 300) {
+
+    if (aether >= 14) {
+      console.error(`  DA check: opps=${daOpportunities} score=${bestDAScore} found=${bestDA?'Y':'N'}`);
+    }
+
+    // Double attack - EXTREMELY AGGRESSIVE: use if ANY value
+    // Lowered threshold to 100 (basically any capture) and MASSIVE priority boost
+    if (bestDA && bestDAScore >= 100) { // Any capture worth using!
+      const prio = bestDAScore * 0.40 + 250; // HUGE priority boost
+
+      console.error(`  ✓✓ DA CANDIDATE prio=${prio.toFixed(0)}`);
+
       candidates.push({
-        priority: bestDAScore * 0.10,
+        priority: prio,
         exec: () => castDoubleAttack(state, bestDA.fromR, bestDA.fromC, bestDA.toR, bestDA.toC, bestDA.jumpR, bestDA.jumpC),
         name: 'DOUBLE_ATTACK',
         payload: { power: 'DOUBLE_ATTACK', from: { r: bestDA.fromR, c: bestDA.fromC }, to: { r: bestDA.toR, c: bestDA.toC }, jump: { r: bestDA.jumpR, c: bestDA.jumpC } }
@@ -2990,6 +3943,11 @@ function botConsiderPowers(state, forColor) {
   // Sort by priority, pick the best (or random for easy)
   candidates.sort((a, b) => b.priority - a.priority);
 
+  if (candidates.length > 0 && aether >= 14) {
+    const top3 = candidates.slice(0,3).map(c=>`${c.name}(${c.priority.toFixed(0)})`).join(' ');
+    console.error(`  Candidates: ${top3}`);
+  }
+
   if (BOT.difficulty === 'easy') {
     // 20% chance to cast a random power, 80% skip
     if (Math.random() > 0.2) return null;
@@ -3005,7 +3963,10 @@ function botConsiderPowers(state, forColor) {
 
   // Hard: use powers strategically — balance spending vs saving for bigger powers
   const best = candidates[0];
-  if (best.priority < 15) return null;
+  if (best.priority < 15) {
+    if (aether >= 14) console.error(`  → SKIP low prio`);
+    return null;
+  }
 
   const aetherNow = state.mana[forColor];
   const isBigPower = best.name === 'VENGEANCE' || best.name === 'PROMOTE' || best.name === 'WALL';
@@ -3013,7 +3974,10 @@ function botConsiderPowers(state, forColor) {
 
   // --- Tier 1: Always cast big powers (Vengeance, Promote, Wall) ---
   // These are the highest-impact powers and afford-gated at 15-18 aether.
-  if (isBigPower) return best;
+  if (isBigPower) {
+    console.error(`  → USE ${best.name}`);
+    return best;
+  }
 
   // --- Tier 2: Mid-tier powers (Imprison, Double Attack, Cleanse, Aether Block, Bomba) ---
   // Already cost 10-14 aether, so afford-check is sufficient gating.
@@ -3023,7 +3987,12 @@ function botConsiderPowers(state, forColor) {
     // If we just spent on mid-tier, can we STILL reach Vengeance in ~4 turns?
     // Don't block mid-tier forever — they're still very impactful.
     // Only defer if we're VERY close to Vengeance (within 3 aether after spending)
-    if (gapToVengeance <= 3 && best.priority < 60) return null;
+    if (gapToVengeance <= 3 && best.priority < 60) {
+      console.error(`  → SKIP ${best.name} (save4Veng)`);
+      return null;
+    }
+
+    console.error(`  → USE ${best.name}`);
     return best;
   }
 

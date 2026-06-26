@@ -37,16 +37,17 @@ const POWER_TIER = {
 };
 
 // v3.5 cost rebalance — Imprison + Cleanse aligned at 14.
+// v3.6: Shield -> 14, Aether Block -> 16, Double Attack -> 14 (Bug fix #7)
 const POWER_COSTS = {
   [POWER.SPAWN]: 6,
   [POWER.FROST]: 8,
-  [POWER.FORTIFY]: 7,
+  [POWER.FORTIFY]: 14,
   [POWER.BLINK]: 8,
   [POWER.IMPRISON]: 14,
-  [POWER.AETHER_BLOCK]: 10,
+  [POWER.AETHER_BLOCK]: 16,
   [POWER.CLEANSE]: 14,
   [POWER.BOMBA]: 14,
-  [POWER.DOUBLE_ATTACK]: 12,
+  [POWER.DOUBLE_ATTACK]: 14,
   [POWER.PROMOTE]: 15,
   [POWER.VENGEANCE]: 18,
   [POWER.WALL]: 18,
@@ -277,12 +278,20 @@ function startOfTurn(state) {
 // Generate Aether for a player. First turn is "skipped" so players don't start their
 // very first turn already charged.
 // v3.2: base gen scales by fullTurnsPlayed (1-10:+1, 11-20:+2, 21+:+3).
+// v3.6: Bug fix #5 - Aether Block prevents aether GAIN on opponent's next turn
 function generateAetherForPlayer(state, color) {
   state.fullTurnsPlayed[color] = (state.fullTurnsPlayed[color] || 0) + 1;
   if (!state.firstGenSkipped[color]) {
     state.firstGenSkipped[color] = true;
     return;
   }
+
+  // Bug fix #5: If this player is aether-blocked, they don't gain aether this turn
+  if (state.aetherBlocked[color]) {
+    state.log.push(`${colorName(color)} gains no Aether this turn (blocked).`);
+    return;
+  }
+
   let gain = aetherBaseGenForTurn(state.fullTurnsPlayed[color]);
   if (controlsCenter(state, color)) gain += CENTER_BONUS;
   const fountainsOccupied = occupiedFountains(state, color);
@@ -821,6 +830,7 @@ function pieceTypeShort(t) {
 }
 
 // ---------- Sacrifice ----------
+// v3.6: Bug fix #3 - If sacrifice causes discovery check on opponent, turn passes immediately
 function sacrificePiece(state, r, c) {
   if (state.winner) return { error: 'Game over' };
   const color = state.turn;
@@ -850,6 +860,17 @@ function sacrificePiece(state, r, c) {
   if (piece.imprisoned) {
     state.log.push(`${piece.imprisoned.color === COLOR.WHITE ? 'White' : 'Black'}'s imprisoned ${piece.imprisoned.type} perished with its captor.`);
   }
+
+  // Bug fix #3: Check if sacrifice caused discovery check on opponent
+  const opp = opposite(color);
+  if (isInCheck(state.board, opp)) {
+    state.log.push(`${colorName(opp)} is in check.`);
+    state.lastActionKind = 'MOVE'; // Treat as move-like action
+    clearPerTurnEffects(state, state.turn);
+    endOfTurn(state);
+    return { success: true, gain, passedTurn: true };
+  }
+
   return { success: true, gain };
 }
 
@@ -991,6 +1012,17 @@ function castBlink(state, fromR, fromC, toR, toC) {
   state.log.push(`${colorName(color)} ✦ Blink: ${pieceTypeShort(p.type)} ${algebraic(fromR,fromC)}→${algebraic(toR,toC)}.`);
   state.lastActionKind = 'POWER';
   state.lastMoveInfo = { type: 'BLINK', from: {r:fromR,c:fromC}, to: {r:toR,c:toC} };
+
+  // Bug fix: Check if Blink caused discovery check on opponent
+  // (moving the piece can expose checks from pieces behind it)
+  const opp = opposite(color);
+  if (isInCheck(state.board, opp)) {
+    state.log.push(`${colorName(opp)} is in check.`);
+    clearPerTurnEffects(state, state.turn);
+    endOfTurn(state);
+    return { success: true, passedTurn: true };
+  }
+
   clearPerTurnEffects(state, state.turn);
   endOfTurn(state);
   return { success: true };
@@ -1007,9 +1039,10 @@ function castSpawn(state, r, c) {
   if (rankFromPerspective < 1 || rankFromPerspective > 4) return { error: 'Must spawn in your half (ranks 1–4)' };
 
   pushHistory(state);
+  // Bug fix #4: Spectral pawn lasts only current turn, expires at start of caster's next turn
   const pawn = makePiece(PIECE.PAWN, color, {
     isSpectral: true,
-    spectralExpireTurn: state.turnNumber + 2,
+    spectralExpireTurn: state.turnNumber + 1,
     originFile: c
   });
   pawn.hasMoved = true;
@@ -1085,7 +1118,9 @@ function castDoubleAttack(state, fromR, fromC, toR, toC, jumpR, jumpC) {
   if (!attacker) return { error: 'No attacker' };
   if (attacker.color !== color) return { error: 'Not your piece' };
   if (attacker.type === PIECE.KING) return { error: 'Double Attack cannot target the King' };
-  if (attacker.imprisoned || attacker.isSpectral || (attacker.frozenUntil && attacker.frozenUntil > state.turnNumber)) {
+  // Bug fix #2: Captors CAN use Double Attack (removed attacker.imprisoned check)
+  // Only block if piece is Spectral or Frozen
+  if (attacker.isSpectral || (attacker.frozenUntil && attacker.frozenUntil > state.turnNumber)) {
     return { error: 'Piece cannot cast Double Attack' };
   }
 
@@ -1128,12 +1163,17 @@ function castDoubleAttack(state, fromR, fromC, toR, toC, jumpR, jumpC) {
   // the attacker is still on fromR,fromC; else on toR,toC.
   const curR = firstShieldBlock ? fromR : toR;
   const curC = firstShieldBlock ? fromC : toC;
-  // Can't move to same square; second move can be no-op only if first was a capture
-  // (i.e. we allow player to "skip" second by choosing first==second==cur).
-  // For simplicity: require a distinct, legal second move.
+  // Bug fix #6: Allow second attack on same square if first hit broke shield (can finish the kill)
+  // Otherwise require distinct moves
+  const sameSquareAsFirst = (jumpR === toR && jumpC === toC);
+  if (sameSquareAsFirst && !firstShieldBlock) {
+    // Same square but no shield break = invalid (already moved there or captured it)
+    popHistory(state);
+    return { error: 'Second move must target a different square (unless breaking shield on same piece)' };
+  }
   if (jumpR === curR && jumpC === curC) {
     popHistory(state);
-    return { error: 'Second move must differ from first landing' };
+    return { error: 'Second move must differ from current position' };
   }
 
   const secondTarget = state.board[jumpR][jumpC];
@@ -1174,6 +1214,17 @@ function castDoubleAttack(state, fromR, fromC, toR, toC, jumpR, jumpC) {
   state.log.push(`${colorName(color)} ⚔ Double Attack: ${pieceTypeShort(attacker.type)} ${algebraic(fromR,fromC)}→${algebraic(toR,toC)}→${algebraic(jumpR,jumpC)}.`);
   state.lastMoveInfo = { type:'DOUBLE_ATTACK', from:{r:fromR,c:fromC}, to:{r:toR,c:toC}, jump:{r:jumpR,c:jumpC} };
   state.lastActionKind = 'POWER';
+
+  // Bug fix: Check if Double Attack caused discovery check on opponent
+  // (moving the piece can expose checks from pieces behind it)
+  const opp = opposite(color);
+  if (isInCheck(state.board, opp)) {
+    state.log.push(`${colorName(opp)} is in check.`);
+    clearPerTurnEffects(state, state.turn);
+    endOfTurn(state);
+    return { success: true, firstShieldBlock, secondShieldBlock, passedTurn: true };
+  }
+
   clearPerTurnEffects(state, state.turn);
   endOfTurn(state);
   return { success: true, firstShieldBlock, secondShieldBlock };
@@ -1322,12 +1373,24 @@ function castPromote(state, r, c, newType) {
   state.log.push(`${colorName(color)} ♛ Promote: Pawn ${algebraic(r,c)} → ${pieceTypeShort(newType)}.`);
 
   // Check if this causes mate
-  if (isCheckmate(state.board, opposite(color), state)) {
+  const opp = opposite(color);
+  if (isCheckmate(state.board, opp, state)) {
     state.winner = color;
     state.winReason = 'CHECKMATE';
     state.log.push(`Checkmate by Promote!`);
     return { success: true, mate: true };
   }
+
+  // Bug fix: Check if Promote caused check on opponent (turn should pass)
+  if (isInCheck(state.board, opp)) {
+    state.log.push(`${colorName(opp)} is in check.`);
+    state.lastActionKind = 'POWER';
+    state.lastMoveInfo = { type: 'PROMOTE', to: {r,c} };
+    clearPerTurnEffects(state, state.turn);
+    endOfTurn(state);
+    return { success: true, passedTurn: true };
+  }
+
   state.lastActionKind = 'POWER';
   state.lastMoveInfo = { type: 'PROMOTE', to: {r,c} };
   clearPerTurnEffects(state, state.turn);
@@ -1381,6 +1444,16 @@ function castChronobreak(state) {
 
   state.log.push(`CHRONOBREAK! ${colorName(opp)}'s entire turn rewound (moves + powers).`);
   state.lastActionKind = 'CHRONOBREAK';
+
+  // Bug fix: Check if Chronobreak caused discovery check on opponent
+  // (rewinding board state can expose checks)
+  if (isInCheck(state.board, opp)) {
+    state.log.push(`${colorName(opp)} is in check.`);
+    clearPerTurnEffects(state, state.turn);
+    endOfTurn(state);
+    return { success: true, passedTurn: true };
+  }
+
   return { success: true };
 }
 
@@ -1415,6 +1488,17 @@ function castVengeance(state, r, c) {
   state.log.push(`${colorName(color)} ☠ Vengeance: destroyed ${pieceTypeShort(target.type)} at ${algebraic(r,c)}.`);
   state.lastMoveInfo = { type: 'VENGEANCE', to: {r,c} };
   state.lastActionKind = 'POWER';
+
+  // Bug fix: Check if Vengeance caused discovery check on opponent
+  // (removing the piece can expose checks)
+  const opp = opposite(color);
+  if (isInCheck(state.board, opp)) {
+    state.log.push(`${colorName(opp)} is in check.`);
+    clearPerTurnEffects(state, state.turn);
+    endOfTurn(state);
+    return { success: true, passedTurn: true };
+  }
+
   clearPerTurnEffects(state, state.turn);
   endOfTurn(state);
   return { success: true };

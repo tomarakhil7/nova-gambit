@@ -407,6 +407,10 @@ function restore(board, snap) {
 // Apply a move without validation (used internally for simulation)
 function applyMoveRaw(board, fromR, fromC, move, gameState) {
   const piece = board[fromR][fromC];
+  if (!piece) {
+    // Safety: invalid move with no piece at source - return empty result
+    return { captured: null, shieldBroke: false };
+  }
   const target = board[move.r][move.c];
 
   // FORTIFY: shielded piece capture fizzles — attacker does NOT move, shield absorbs one hit.
