@@ -2209,7 +2209,16 @@ function botEvaluateThreats(state, forColor) {
 
   // Threat 1: Vengeance on our high-value pieces
   if (oppAether >= POWER_COSTS[POWER.VENGEANCE]) {
-    const ourQueen = findPiece(state.board, forColor, PIECE.QUEEN);
+    // Find our Queen
+    let ourQueen = null;
+    for (let r = 0; r < 8 && !ourQueen; r++) {
+      for (let c = 0; c < 8 && !ourQueen; c++) {
+        const p = state.board[r][c];
+        if (p && p.color === forColor && p.type === PIECE.QUEEN) {
+          ourQueen = {r, c};
+        }
+      }
+    }
     if (ourQueen) {
       const threat = {
         type: 'VENGEANCE_THREAT',
