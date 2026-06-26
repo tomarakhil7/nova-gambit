@@ -214,17 +214,6 @@ function startOfTurn(state) {
   // because their home tile was occupied) — both colours, every turn start.
   reseatPendingPrisoners(state);
 
-  // Remove expired Spectral Pawns of this player
-  for (let r = 0; r < 8; r++) {
-    for (let c = 0; c < 8; c++) {
-      const p = state.board[r][c];
-      if (p && p.isSpectral && p.color === color && p.spectralExpireTurn <= state.turnNumber) {
-        state.board[r][c] = null;
-        state.log.push(`Spectral pawn at ${algebraic(r,c)} vanished.`);
-      }
-    }
-  }
-
   // v3.2: Expire Fortify shields that have timed out (on the caster's next turn start)
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
@@ -672,6 +661,18 @@ function endOfTurn(state) {
     }
   }
 
+  // Bug fix #4 (CORRECTED): Remove expired Spectral Pawns at END of turn
+  // Spectral pawns last only 1 ply (half-move) - they vanish at end of spawner's turn
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = state.board[r][c];
+      if (p && p.isSpectral && p.color === state.turn && p.spectralExpireTurn <= state.turnNumber) {
+        state.board[r][c] = null;
+        state.log.push(`Spectral pawn at ${algebraic(r,c)} vanished.`);
+      }
+    }
+  }
+
   // Pass turn (v3.4: Aether is now generated at start-of-turn inside startOfTurn)
   state.turn = opp;
   state.turnNumber += 1;
@@ -1039,10 +1040,10 @@ function castSpawn(state, r, c) {
   if (rankFromPerspective < 1 || rankFromPerspective > 4) return { error: 'Must spawn in your half (ranks 1–4)' };
 
   pushHistory(state);
-  // Bug fix #4: Spectral pawn lasts only current turn, expires at start of caster's next turn
+  // Bug fix #4 (CORRECTED): Spectral pawn lasts 1 ply (half-move), vanishes at END of current turn
   const pawn = makePiece(PIECE.PAWN, color, {
     isSpectral: true,
-    spectralExpireTurn: state.turnNumber + 1,
+    spectralExpireTurn: state.turnNumber,
     originFile: c
   });
   pawn.hasMoved = true;
