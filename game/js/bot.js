@@ -1247,7 +1247,7 @@ function botSEE(state, targetR, targetC, attackerR, attackerC, forColor) {
     activeColor = opposite(activeColor);
   }
 
-  restore(state.board, boardCopy);
+  // Note: No need to restore - boardCopy was a local snapshot, state.board unchanged
 
   // Negamax the gain array
   for (let i = gain.length - 1; i > 0; i--) {
