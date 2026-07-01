@@ -1010,6 +1010,98 @@ function botEvaluate(state, forColor) {
     else score -= openBonus + rankBonus;
   }
 
+  // ===== QUEEN ON OPEN FILE VULNERABILITY / BONUS =====
+  // Penalty if our queen is on same file as enemy rook (x-ray threat)
+  // Bonus if our queen is on open file toward enemy king
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = state.board[r][c];
+    if (!p || p.type !== PIECE.QUEEN || p.isSpectral) continue;
+    // Check if this queen is on same file as enemy heavy piece
+    let enemyHeavyOnFile = false;
+    let ownPawnsOnFile = 0;
+    for (let scanR = 0; scanR < 8; scanR++) {
+      const fp = state.board[scanR][c];
+      if (!fp) continue;
+      if (fp.type === PIECE.PAWN && fp.color === p.color && !fp.isSpectral) ownPawnsOnFile++;
+      if (fp.color !== p.color && (fp.type === PIECE.ROOK || fp.type === PIECE.QUEEN) && !fp.isSpectral) {
+        enemyHeavyOnFile = true;
+      }
+    }
+    if (p.color === forColor) {
+      // Our queen: penalize if on same file as enemy rook/queen (x-ray danger)
+      if (enemyHeavyOnFile && ownPawnsOnFile === 0) score -= 60; // Open file with enemy heavy piece!
+      else if (enemyHeavyOnFile) score -= 25; // Semi-open, still dangerous
+    } else {
+      // Enemy queen: same logic reversed
+      if (enemyHeavyOnFile && ownPawnsOnFile === 0) score += 60;
+      else if (enemyHeavyOnFile) score += 25;
+    }
+  }
+
+  // ===== BACK-RANK WEAKNESS DETECTION =====
+  // Penalize king trapped on back rank with no escape (luft)
+  if (phase > 0.3) { // Only after early opening
+    const myKingPos = findKing(state.board, forColor);
+    const oppKingPos = findKing(state.board, opp);
+    // Check our king back-rank weakness
+    if (myKingPos) {
+      const backRank = forColor === COLOR.WHITE ? 7 : 0;
+      if (myKingPos.r === backRank) {
+        // King on back rank - check if trapped (all forward squares blocked by own pawns)
+        const fwdDir = forColor === COLOR.WHITE ? -1 : 1;
+        let hasLuft = false;
+        for (let dc = -1; dc <= 1; dc++) {
+          const lr = backRank + fwdDir, lc = myKingPos.c + dc;
+          if (lc < 0 || lc > 7) continue;
+          const lp = state.board[lr] && state.board[lr][lc];
+          if (!lp || lp.color !== forColor || lp.type !== PIECE.PAWN) { hasLuft = true; break; }
+        }
+        if (!hasLuft) {
+          // Check if enemy has heavy piece that can exploit back rank
+          let enemyHasBackRankThreat = false;
+          for (let ec = 0; ec < 8; ec++) {
+            for (let er = 0; er < 8; er++) {
+              const ep = state.board[er][ec];
+              if (ep && ep.color === opp && (ep.type === PIECE.ROOK || ep.type === PIECE.QUEEN) && !ep.isSpectral) {
+                enemyHasBackRankThreat = true; break;
+              }
+            }
+            if (enemyHasBackRankThreat) break;
+          }
+          if (enemyHasBackRankThreat) score -= 80; // Severe back-rank weakness
+        }
+      }
+    }
+    // Check opponent king back-rank weakness (bonus for us)
+    if (oppKingPos) {
+      const oppBackRank = opp === COLOR.WHITE ? 7 : 0;
+      if (oppKingPos.r === oppBackRank) {
+        const oppFwdDir = opp === COLOR.WHITE ? -1 : 1;
+        let oppHasLuft = false;
+        for (let dc = -1; dc <= 1; dc++) {
+          const lr = oppBackRank + oppFwdDir, lc = oppKingPos.c + dc;
+          if (lc < 0 || lc > 7) continue;
+          const lp = state.board[lr] && state.board[lr][lc];
+          if (!lp || lp.color !== opp || lp.type !== PIECE.PAWN) { oppHasLuft = true; break; }
+        }
+        if (!oppHasLuft) {
+          // Check if WE have heavy piece to exploit back rank
+          let weHaveBackRankThreat = false;
+          for (let ec = 0; ec < 8; ec++) {
+            for (let er = 0; er < 8; er++) {
+              const ep = state.board[er][ec];
+              if (ep && ep.color === forColor && (ep.type === PIECE.ROOK || ep.type === PIECE.QUEEN) && !ep.isSpectral) {
+                weHaveBackRankThreat = true; break;
+              }
+            }
+            if (weHaveBackRankThreat) break;
+          }
+          if (weHaveBackRankThreat) score += 80; // Opponent has back-rank weakness we can exploit
+        }
+      }
+    }
+  }
+
   // ===== DOUBLED & ISOLATED PAWN PENALTIES =====
   for (let c = 0; c < 8; c++) {
     let myPawnsOnFile = 0, oppPawnsOnFile = 0;
@@ -3014,14 +3106,14 @@ function botConsiderPowers(state, forColor) {
       // OPTIMIZED: Scale by game phase and material balance
       let prio;
       if (materialBalance > 300) {
-        // We're ahead: lower priority (0.2), save aether UNLESS hoarding
-        prio = bestVal * 0.20;
+        // We're ahead: STILL give offensive bonus (0.35 vs 0.20) — attack when winning!
+        prio = bestVal * 0.35;
       } else if (materialBalance < -200) {
-        // We're behind: higher priority (0.4), desperate for material
-        prio = bestVal * 0.40;
+        // We're behind: higher priority (0.45 vs 0.40), desperate for material
+        prio = bestVal * 0.45;
       } else {
-        // Balanced: medium priority
-        prio = bestVal * (phase < 0.5 ? 0.32 : 0.27);
+        // Balanced: medium priority, slightly higher
+        prio = bestVal * (phase < 0.5 ? 0.35 : 0.30);
       }
 
       // LAYER 4: Apply anti-hoarding multiplier
@@ -3608,7 +3700,7 @@ function botConsiderPowers(state, forColor) {
         const defendedAfter = isSquareAttacked(state.board, nr, nc, forColor);
 
         // CRITICAL FIX: Check if removing piece from (r,c) EXPOSES our high-value pieces
-        // Only check our pre-located King and Queen (fast O(1) check, not O(64))
+        // Check King, Queen, AND Rooks (pre-located King/Queen for speed, scan for Rooks)
         let exposesOwnPieces = false;
         // Check King safety first (absolute priority)
         if (blinkMyKing && isSquareAttacked(state.board, blinkMyKing.r, blinkMyKing.c, opp)) {
@@ -3625,6 +3717,26 @@ function botConsiderPowers(state, forColor) {
               exposesOwnPieces = true; // Queen NEWLY attacked after blink
             }
             restore(state.board, snapQ);
+          }
+        }
+        // Check Rook safety (scan for Rooks on same file/rank/diagonal as vacated square)
+        if (!exposesOwnPieces) {
+          for (let rr = 0; rr < 8 && !exposesOwnPieces; rr++) {
+            for (let rc = 0; rc < 8 && !exposesOwnPieces; rc++) {
+              const rp = state.board[rr][rc];
+              if (!rp || rp.color !== forColor || rp.type !== PIECE.ROOK) continue;
+              if (rr === nr && rc === nc) continue; // skip if this IS the piece we blinked
+              if (isSquareAttacked(state.board, rr, rc, opp)) {
+                // Was it attacked before? Only flag if NEWLY exposed
+                const snapR = snapshot(state.board);
+                state.board[r][c] = p;
+                state.board[nr][nc] = null;
+                if (!isSquareAttacked(state.board, rr, rc, opp)) {
+                  exposesOwnPieces = true; // Rook NEWLY exposed after blink
+                }
+                restore(state.board, snapR);
+              }
+            }
           }
         }
 
@@ -3651,7 +3763,10 @@ function botConsiderPowers(state, forColor) {
           blinkScore = 200;
           reason = 'checkmate';
         } else if (isAttacked) {
-          blinkScore = myValue * 0.3; // escape value
+          // FIX: Reduce early-game escape value from 0.3x to 0.25x
+          // This discourages overly defensive blinking in middlegame when better plays exist
+          const escapeMultiplier = phase < 0.5 ? 0.25 : 0.28;
+          blinkScore = myValue * escapeMultiplier; // escape value (reduced)
           reason = 'escape';
         }
 
@@ -3722,9 +3837,29 @@ function botConsiderPowers(state, forColor) {
         // Skip this blink - too early in the game for repositioning
         // Save aether for more impactful midgame powers
       } else {
+        // FIX: Reduce BLINK priority when bot is ahead in material (offensive layer)
+        // If we're winning, BLINK should be less appealing than VENGEANCE/PROMOTION
+        const myMat = botCountMaterial(state, forColor);
+        const oppMat = botCountMaterial(state, opp);
+        const isAhead = (myMat - oppMat) > 300;
+        let blinkScoreAdjusted = bestBlinkScore;
+
+        // If we're ahead and it's just a reposition (not critical escape), reduce priority
+        if (isAhead && bestReason !== 'escape' && bestReason !== 'checkmate' && bestReason !== 'bomb-escape') {
+          blinkScoreAdjusted *= 0.6; // Cut non-critical repositioning value in half when ahead
+        }
+
+        // FIX: Penalty for consecutive BLINKs (avoid blink-stalling loops)
+        let consecutiveBlinks = 0;
+        if (state.lastPowerUsed && state.lastPowerUsed.name === 'BLINK') {
+          consecutiveBlinks = (state.consecutiveBlinkCount || 0) + 1;
+          if (consecutiveBlinks >= 3) {
+            blinkScoreAdjusted *= 0.5; // Heavily discourage 3+ BLINKs in a row
+          }
+        }
+
         // LAYER 4: Apply anti-hoarding multiplier (same as VENGEANCE)
-        // Raised threshold from 50 to 100 to prevent trivial repositioning plays
-        let blinkPrio = bestBlinkScore * hoardingMultiplier;
+        let blinkPrio = blinkScoreAdjusted * hoardingMultiplier;
         candidates.push({
           priority: blinkPrio,
           exec: () => castBlink(state, bestBlink.fromR, bestBlink.fromC, bestBlink.toR, bestBlink.toC),
@@ -3908,6 +4043,20 @@ function botConsiderPowers(state, forColor) {
         state.board[m1.r][m1.c] = p;
         state.board[r][c] = null;
         if (isInCheck(state.board, forColor)) { restore(state.board, snap); continue; }
+        // SAFETY: Check if first move exposes own Queen or Rook (discovered attack)
+        let daExposesHVP = false;
+        for (let hr = 0; hr < 8 && !daExposesHVP; hr++) {
+          for (let hc = 0; hc < 8 && !daExposesHVP; hc++) {
+            const hp = state.board[hr][hc];
+            if (!hp || hp.color !== forColor) continue;
+            if (hp.type !== PIECE.QUEEN && hp.type !== PIECE.ROOK) continue;
+            if (hr === m1.r && hc === m1.c) continue; // skip the piece we moved
+            if (isSquareAttacked(state.board, hr, hc, opp) && !isSquareAttacked(state.board, hr, hc, forColor)) {
+              daExposesHVP = true; // Our Q/R hangs after first capture
+            }
+          }
+        }
+        if (daExposesHVP) { restore(state.board, snap); continue; }
         const secondMoves = legalMoves(state.board, m1.r, m1.c, state);
         let bestSecondVal = 0, bestSecondMove = null, secondReason = null;
         for (const m2 of secondMoves) {
@@ -4537,14 +4686,29 @@ function botConsiderPowers(state, forColor) {
 
   const aetherNow = state.mana[forColor];
 
-  // FIX #3: Force VENGEANCE at HIGH aether to prevent waste at cap
-  // When aether >= 24, bot MUST spend to avoid generation waste
-  // Find the best VENGEANCE candidate and force it
-  if (aetherNow >= 24 && aetherNow < AETHER_CAP) {
-    const vengeanceCandidate = candidates.find(c => c.name === 'VENGEANCE');
-    if (vengeanceCandidate && vengeanceCandidate.priority >= 30) {
-      console.error(`  → FORCED_VENGEANCE at ${aetherNow}/30 aether (anti-waste)`);
-      return vengeanceCandidate;
+  // FIX #3: Force BIG POWER at MODERATE aether to prevent waste at cap
+  // Start spending early (at 15+ aether) on 2-power combos instead of drifting to cap
+  // This prevents the inefficient hoarding seen in game 21 (reached 27/30 before spending)
+  if (aetherNow >= 15 && aetherNow < AETHER_CAP) {
+    // Look for any big power (VENGEANCE, PROMOTE, WALL) with reasonable priority
+    const bigPower = candidates.find(c =>
+      (c.name === 'VENGEANCE' || c.name === 'PROMOTE' || c.name === 'WALL') &&
+      c.priority >= 25
+    );
+    if (bigPower && aetherNow >= 20) {
+      // At 20-22 aether, start pushing big powers if available
+      if (bigPower.priority >= 35) {
+        console.error(`  → FORCED_${bigPower.name} at ${aetherNow}/30 aether (early anti-waste, priority ${bigPower.priority.toFixed(0)})`);
+        return bigPower;
+      }
+    }
+    // At high aether (>=24), MUST spend something to avoid waste
+    if (aetherNow >= 24) {
+      const bestSpender = candidates[0];
+      if (bestSpender && bestSpender.priority >= 20) {
+        console.error(`  → FORCED_${bestSpender.name} at ${aetherNow}/30 aether (critical anti-waste)`);
+        return bestSpender;
+      }
     }
   }
 
@@ -4578,8 +4742,18 @@ function botConsiderPowers(state, forColor) {
   // --- Tier 3: Cheap powers (Frost 8, Fortify 7, Blink 8) ---
   // These must be heavily gated to allow aether accumulation.
 
-  // CRITICAL: Blink to save a high-value piece always wins (piece > aether)
-  if (best.name === 'BLINK' && best.priority >= 100) return best; // Rook+ escape
+  // FIX: RAISE BLINK threshold from 100 to 150 for non-critical escapes
+  // CRITICAL: Blink to save a high-value piece (Queen/Rook) with reason "escape" or "bomb-escape"
+  if (best.name === 'BLINK') {
+    const blinkPayload = best.payload;
+    const isEscape = blinkPayload && (blinkPayload.reason === 'escape' || blinkPayload.reason === 'bomb-escape' || blinkPayload.reason === 'checkmate');
+    if (isEscape && best.priority >= 150) return best; // High-value escape
+    if (blinkPayload && blinkPayload.reason === 'checkmate' && best.priority >= 50) return best; // Checkmate always wins
+    // For other blinks (repositioning, fountain, fork), require >= 180 (very strict)
+    if (!isEscape && best.priority >= 180) return best;
+    // Reject low-priority blinks
+    if (best.priority < 150) return null;
+  }
 
   // Fortify to save queen/rook is urgent
   if (best.name === 'FORTIFY' && best.priority >= 50) return best;
@@ -4880,6 +5054,15 @@ function botExecuteTurn() {
           setStatus(`Bot cast ${powerAction.name}!`, 'ok');
           render();
           powersCastThisTurn++;
+
+          // FIX: Track last power used and consecutive blinks for better heuristics
+          UI.state.lastPowerUsed = { name: powerAction.name, priority: powerAction.priority };
+          if (powerAction.name === 'BLINK') {
+            UI.state.consecutiveBlinkCount = (UI.state.consecutiveBlinkCount || 0) + 1;
+          } else {
+            UI.state.consecutiveBlinkCount = 0; // Reset counter if not a blink
+          }
+
           // Turn ended, we're done
           if (UI.state.turn !== color) {
             botFinishTurn();
@@ -4906,6 +5089,15 @@ function botExecuteTurn() {
           setStatus(`Bot cast ${powerAction.name}!`, 'ok');
           render();
           powersCastThisTurn++;
+
+          // FIX: Track last power used and consecutive blinks for better heuristics
+          UI.state.lastPowerUsed = { name: powerAction.name, priority: powerAction.priority };
+          if (powerAction.name === 'BLINK') {
+            UI.state.consecutiveBlinkCount = (UI.state.consecutiveBlinkCount || 0) + 1;
+          } else {
+            UI.state.consecutiveBlinkCount = 0; // Reset counter if not a blink
+          }
+
           lastPowerWasContinueTurn = true;
           // Check if game ended or turn somehow changed
           if (UI.state.winner || UI.state.turn !== color) {

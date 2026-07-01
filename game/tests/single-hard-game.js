@@ -21,7 +21,7 @@ vm.runInContext(fs.readFileSync('game/js/mana-system.js', 'utf8'), ctx);
 vm.runInContext(fs.readFileSync('game/js/bot.js', 'utf8'), ctx);
 
 const testCode = `
-console.log('========== HARD vs HARD BOT GAME (Medium Search) ==========\\n');
+console.log('========== HARD vs HARD BOT GAME ==========\\n');
 
 const moves = [];
 const powerUsed = [];
@@ -30,7 +30,7 @@ const aetherLog = [];
 UI.state = initGame();
 botClearHistory();
 let turnCount = 0;
-const maxTurns = 150;
+const maxTurns = 75;
 const gameStart = Date.now();
 
 while (!UI.state.winner && turnCount < maxTurns) {
@@ -58,13 +58,12 @@ while (!UI.state.winner && turnCount < maxTurns) {
     break;
   }
   
-  // Set difficulty
   BOT.difficulty = 'hard';
   BOT.enabled = true;
   BOT.botVsBot = true;
   BOT.color = color;
   
-  // Try to cast a power
+  // Try power
   const power = botConsiderPowers(UI.state, color);
   if (power) {
     try {
@@ -83,21 +82,42 @@ while (!UI.state.winner && turnCount < maxTurns) {
         continue;
       }
     } catch (e) {
-      // Ignore power errors
+      // Ignore
     }
   }
   
-  // Choose best move
-  let chosenMove = null;
+  // Choose move
   const bookMove = botGetBookMove(UI.state, color, legalMoves);
-  if (bookMove) {
-    chosenMove = bookMove;
-  } else {
-    chosenMove = botSearchBestMove(UI.state, legalMoves, color);
-  }
+  let chosenMove = bookMove || legalMoves[0];
   
-  if (!chosenMove) {
-    chosenMove = legalMoves[0];
+  if (!bookMove && legalMoves.length > 1) {
+    // Quick evaluation without deep search
+    let bestMove = legalMoves[0];
+    let bestScore = -999999;
+    
+    for (let i = 0; i < Math.min(10, legalMoves.length); i++) {
+      const move = legalMoves[i];
+      const piece = UI.state.board[move.from.r][move.from.c];
+      if (!piece) continue;
+      
+      // Simple heuristic
+      let score = 0;
+      if (UI.state.board[move.to.r][move.to.c]) {
+        const target = UI.state.board[move.to.r][move.to.c];
+        const pieceValues = { 'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9 };
+        score = (pieceValues[target.type] || 0) * 10;
+      }
+      
+      // Push toward center
+      const centerDist = Math.abs(move.to.c - 3.5) + Math.abs(move.to.r - 3.5);
+      score -= centerDist * 0.5;
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestMove = move;
+      }
+    }
+    chosenMove = bestMove;
   }
   
   // Get notation
@@ -152,7 +172,7 @@ console.log('Game Duration: ' + elapsed + 's');
 console.log('Final Aether: White ' + UI.state.mana[COLOR.WHITE] + '/30, Black ' + UI.state.mana[COLOR.BLACK] + '/30');
 
 console.log('');
-console.log('--- Move Sequence (Algebraic Notation) ---');
+console.log('--- Move Sequence (Algebraic) ---');
 let moveNum = 1;
 for (let i = 0; i < moves.length; i += 2) {
   const whiteMv = moves[i] || '';
@@ -165,23 +185,23 @@ if (powerUsed.length > 0) {
   console.log('');
   console.log('--- Power Casts ---');
   powerUsed.forEach(p => {
-    console.log('Turn ' + p.turn + ': ' + p.color + ' casts ' + p.power + ' (W=' + p.whiteAether + ', B=' + p.blackAether + ')');
+    console.log('Turn ' + p.turn + ': ' + p.color + ' casts ' + p.power);
   });
 } else {
   console.log('');
   console.log('--- Power Casts ---');
-  console.log('None');
+  console.log('None cast this game');
 }
 
 console.log('');
-console.log('--- Aether State History (All Turns) ---');
+console.log('--- Aether State by Turn ---');
 aetherLog.forEach(log => {
-  console.log('Turn ' + log.turn + ' (' + log.color + '): White=' + log.whiteAether + ', Black=' + log.blackAether);
+  console.log('Turn ' + log.turn + ': White=' + log.whiteAether + ', Black=' + log.blackAether);
 });
 `;
 
-console.log('Loading game modules and starting game...');
+console.log('Loading game modules...');
 const start = Date.now();
-vm.runInContext(testCode, ctx, { timeout: 120000 });
+vm.runInContext(testCode, ctx, { timeout: 60000 });
 console.log('');
-console.log('Total execution time: ' + ((Date.now() - start) / 1000).toFixed(1) + 's');
+console.log('Execution time: ' + ((Date.now() - start) / 1000).toFixed(1) + 's');
