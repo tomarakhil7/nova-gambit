@@ -1483,10 +1483,24 @@ function botOrderScore(state, m, forColor, depth) {
   const piece = state.board[m.from.r][m.from.c];
   if (!piece) return 0; // Safety: invalid move with no piece at source
   const target = state.board[m.to.r][m.to.c];
+
+  // WORKFLOW #3 FIX #3: Enhanced move ordering with SEE-based capture sorting
   // MVV-LVA for captures
   if (target && target.color !== piece.color) {
+    // Base MVV-LVA score
     s += 10000 + BOT_PIECE_VALUES[target.type] * 10 - BOT_PIECE_VALUES[piece.type];
+
+    // Add SEE-based bonus for good captures (winning trades)
+    // This helps with alpha-beta pruning efficiency
+    const seeScore = botSEE(state, m.to.r, m.to.c, m.from.r, m.from.c, forColor);
+    if (seeScore > 0) {
+      s += 1000 + seeScore; // Boost winning trades
+    } else if (seeScore >= 0) {
+      s += 500; // Even trades still good (puts captures before quiet moves)
+    }
+    // Negative SEE captures still ordered before quiet moves due to base score
   }
+
   // Promotions
   if (piece.type === PIECE.PAWN && (m.to.r === 0 || m.to.r === 7)) s += 9000;
   // Killer move bonus (non-capture moves that caused cutoffs at this depth)
@@ -1555,14 +1569,22 @@ function botRootOrderScore(state, m, forColor) {
     // If SEE == 0, it's an even trade, keep base MVV-LVA score
   } else {
     // Non-capture: penalize moving to an attacked square (hanging piece)
+    // WORKFLOW #3 FIX #1: Comprehensive hung piece detection with phase-aware penalties
     if (piece.type !== PIECE.PAWN && isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
       if (!isSquareAttacked(state.board, m.to.r, m.to.c, forColor)) {
-        s -= BOT_PIECE_VALUES[piece.type] * 3; // heavy penalty: piece will be lost
+        // Piece is undefended and attacked - will be captured
+        // Apply phase-aware penalty (higher in midgame when pieces matter most)
+        const phaseMult = forColor === COLOR.WHITE ? (1.0 - phase) : phase;
+        const basePenalty = BOT_PIECE_VALUES[piece.type];
+        const phasedPenalty = basePenalty * 3 * (0.5 + phaseMult); // 1.5x-3x based on phase
+        s -= phasedPenalty;
       } else if (BOT_PIECE_VALUES[piece.type] > 320) {
         // Check SEE for moving into a contested square
         const seeScore = botSEE(state, m.to.r, m.to.c, m.from.r, m.from.c, forColor);
         if (seeScore < 0) {
-          s -= BOT_PIECE_VALUES[piece.type]; // Penalize if SEE says we'll lose the piece
+          const basePenalty = BOT_PIECE_VALUES[piece.type];
+          const phasedPenalty = basePenalty * (0.8 + 0.4 * (1.0 - phase)); // 0.8x-1.2x
+          s -= phasedPenalty;
         }
       }
     }
@@ -2641,9 +2663,25 @@ function botConsiderPowers(state, forColor) {
         payload: { power: 'DOUBLE_ATTACK', from: combo.from, target }
       });
     } else if (combo.type === 'SHIELD_ATTACK' && combo.attacks.length > 0) {
-      // Shield piece then attack
+      // WORKFLOW #3 FIX #2: Shield piece then attack
+      // This combo is crucial for SHIELD+DOUBLE_ATTACK strategy
+      // Boost priority when attacking high-value pieces or when aether is abundant
+      let boostedPriority = combo.priority;
+
+      // Check if any attack targets are high-value
+      const targets = combo.attacks.map(m => state.board[m.r][m.c]);
+      const hasQueenOrRook = targets.some(t => t && (t.type === PIECE.QUEEN || t.type === PIECE.ROOK));
+      if (hasQueenOrRook) {
+        boostedPriority *= 1.5; // 200 → 300
+      }
+
+      // Additional boost if we have excessive aether
+      if (aether >= 28) {
+        boostedPriority *= 1.2; // Encourage spending when capped
+      }
+
       candidates.push({
-        priority: combo.priority,
+        priority: boostedPriority,
         exec: () => castFortify(state, combo.piece.r, combo.piece.c),
         name: 'SHIELD_ATTACK_COMBO',
         payload: { power: 'FORTIFY', piece: combo.piece }
