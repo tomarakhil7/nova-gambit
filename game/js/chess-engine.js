@@ -61,11 +61,29 @@ function createInitialBoard() {
 function inBounds(r, c) { return r >= 0 && r < 8 && c >= 0 && c < 8; }
 
 function algebraic(r, c) {
+  // BOUNDS CHECK: prevent invalid coordinates from generating garbage notation
+  if (typeof r !== 'number' || typeof c !== 'number' || r < 0 || r > 7 || c < 0 || c > 7) {
+    console.error(`[INVALID COORDS] algebraic(${r}, ${c}) - out of bounds or invalid type`);
+    return '??';
+  }
   return String.fromCharCode(97 + c) + (8 - r);
 }
 
 function fromAlgebraic(sq) {
-  return { r: 8 - parseInt(sq[1]), c: sq.charCodeAt(0) - 97 };
+  // BOUNDS CHECK & VALIDATION: ensure algebraic notation produces valid coordinates
+  if (!sq || typeof sq !== 'string' || sq.length < 2) {
+    console.error(`[INVALID NOTATION] fromAlgebraic(${sq}) - invalid input`);
+    return null;
+  }
+  const file = sq.charCodeAt(0) - 97;
+  const rank = parseInt(sq[1]);
+  if (isNaN(rank) || rank < 1 || rank > 8 || file < 0 || file > 7) {
+    console.error(`[INVALID NOTATION] fromAlgebraic(${sq}) - invalid range (file=${file}, rank=${rank})`);
+    return null;
+  }
+  const r = 8 - rank;
+  const c = file;
+  return { r, c };
 }
 
 // Find king position on board
