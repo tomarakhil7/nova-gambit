@@ -3990,8 +3990,8 @@ function botConsiderPowers(state, forColor) {
         payload: { power: 'AETHER_BLOCK', reason: blockReason, oppAether }
       });
 
-      // Diagnostic logging for high-priority blocks
-      if (blockPrio >= 600) {
+      // Diagnostic logging for all blocks (increased from 600 to 100 for better visibility)
+      if (blockPrio >= 100) {
         console.error(`[AETHER_BLOCK] Priority=${blockPrio} Reason=${blockReason} OppA=${oppAether} MyA=${aether}`);
       }
     }
