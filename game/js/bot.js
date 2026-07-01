@@ -3881,7 +3881,10 @@ function botConsiderPowers(state, forColor) {
         // If we detect checkmate threat, block preemptively
         const myMoves = allLegalMoves(state.board, forColor, state);
         let mateOrNearMate = false;
-        for (const mv of myMoves) {
+        // Limit to first 15 moves for performance
+        const checkLim = Math.min(myMoves.length, 15);
+        for (let mi = 0; mi < checkLim; mi++) {
+          const mv = myMoves[mi];
           const snap = snapshot(state.board);
           state.board[mv.to.r][mv.to.c] = state.board[mv.from.r][mv.from.c];
           state.board[mv.from.r][mv.from.c] = null;
@@ -3930,12 +3933,16 @@ function botConsiderPowers(state, forColor) {
     }
 
     // ===== PHASE 6: ENABLE OUR CHECKMATE =====
-    // If we have 20+ aether and checkmate is 1-2 turns away, block to setup
-    if (blockPrio < 600 && aether >= 20) {
+    // If we have 20+ aether and checkmate is 1 turn away, block to setup
+    // NOTE: Only check mate-in-1 to avoid exponential blowup
+    if (blockPrio < 600 && aether >= 20 && oppAether >= 20) {
       const myMoves = allLegalMoves(state.board, forColor, state);
-      let maybeMateIn2 = false;
+      let maybeMateIn1 = false;
 
-      for (const mv of myMoves) {
+      // Only check first 20 moves for performance (captures/checks most likely)
+      const checkLimit = Math.min(myMoves.length, 20);
+      for (let i = 0; i < checkLimit; i++) {
+        const mv = myMoves[i];
         const snap = snapshot(state.board);
         state.board[mv.to.r][mv.to.c] = state.board[mv.from.r][mv.from.c];
         state.board[mv.from.r][mv.from.c] = null;
@@ -3943,39 +3950,14 @@ function botConsiderPowers(state, forColor) {
         if (isInCheck(state.board, opp)) {
           const oppMoves = allLegalMoves(state.board, opp, state);
           if (oppMoves.length === 0) {
-            maybeMateIn2 = true; // Checkmate!
-          } else {
-            // Check mate in 2
-            for (const opp_mv of oppMoves) {
-              const snap2 = snapshot(state.board);
-              state.board[opp_mv.to.r][opp_mv.to.c] = state.board[opp_mv.from.r][opp_mv.from.c];
-              state.board[opp_mv.from.r][opp_mv.from.c] = null;
-
-              const my2Moves = allLegalMoves(state.board, forColor, state);
-              for (const mv2 of my2Moves) {
-                const snap3 = snapshot(state.board);
-                state.board[mv2.to.r][mv2.to.c] = state.board[mv2.from.r][mv2.from.c];
-                state.board[mv2.from.r][mv2.from.c] = null;
-
-                if (isInCheck(state.board, opp)) {
-                  const final_moves = allLegalMoves(state.board, opp, state);
-                  if (final_moves.length === 0) {
-                    maybeMateIn2 = true;
-                  }
-                }
-                restore(state.board, snap3);
-                if (maybeMateIn2) break;
-              }
-              restore(state.board, snap2);
-              if (maybeMateIn2) break;
-            }
+            maybeMateIn1 = true; // Checkmate in 1!
           }
         }
         restore(state.board, snap);
-        if (maybeMateIn2) break;
+        if (maybeMateIn1) break;
       }
 
-      if (maybeMateIn2 && oppAether >= 20) {
+      if (maybeMateIn1) {
         blockPrio = 800; // Use AETHER_BLOCK to setup our mate
         blockReason = 'ENABLE_OUR_CHECKMATE';
       }
