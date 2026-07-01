@@ -184,11 +184,14 @@ Each fix will be:
 
 If you need to resume from here:
 
-1. **Wait for Workflow #3 completion** (check /workflows)
-2. **Read the output files** in `.agents/artifacts/`
-3. **Follow IMPLEMENTATION_ROADMAP.md** for next steps
-4. **Run validation tests** using VALIDATION_TEST_5_GAMES.html
-5. **Commit and document** all changes
+1. **Wait for Workflow #3 completion** (check /workflows or see notification)
+2. **Read:** `.agents/artifacts/WORKFLOW_3_COMPLETION_CHECKLIST.md` ← START HERE
+3. **Extract findings** from Workflow #3 output
+4. **Prioritize fixes** and implement one by one
+5. **Test each fix** with VALIDATION_TEST_5_GAMES.html
+6. **Commit and document** all changes as you go
+
+**Navigation:** See `.agents/artifacts/INDEX.md` for complete file guide
 
 ---
 
