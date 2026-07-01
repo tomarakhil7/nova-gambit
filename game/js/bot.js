@@ -3825,88 +3825,175 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
-  // AETHER BLOCK: Predictive blocking - deny critical escape/counterplay powers
+  // AETHER BLOCK: Strategic opponent aether prediction + defensive blocking
+  // USER'S INSIGHT: Use AETHER_BLOCK to predict opponent's upcoming combos and control tempo
   if (aether >= POWER_COSTS[POWER.AETHER_BLOCK] && !state.aetherBlocked[opp] && !isInCheck(state.board, forColor)) {
     const oppAether = state.mana[opp];
     let blockPrio = 0;
+    let blockReason = '';
 
-    // OPTIMIZED Strategy 1: Block when opponent is 1 turn from mate and needs power to escape
-    if (oppAether >= POWER_COSTS[POWER.BLINK]) {
-      const myMoves = allLegalMoves(state.board, forColor, state);
-      let hasMateOrNearMate = false;
-      for (const mv of myMoves) {
-        const snap = snapshot(state.board);
-        const captured = state.board[mv.to.r][mv.to.c];
-        state.board[mv.to.r][mv.to.c] = state.board[mv.from.r][mv.from.c];
-        state.board[mv.from.r][mv.from.c] = null;
-        if (isInCheck(state.board, opp)) {
-          const oppMoves = allLegalMoves(state.board, opp, state);
-          if (oppMoves.length === 0) {
-            hasMateOrNearMate = true; // Checkmate threat!
-          } else if (oppMoves.length <= 2) {
-            hasMateOrNearMate = true; // Near-mate (very few escapes)
-          }
-        }
-        restore(state.board, snap);
-        if (hasMateOrNearMate) break;
-      }
-      if (hasMateOrNearMate) {
-        blockPrio = 200; // TOP PRIORITY: block opponent's escape powers
-      }
+    // ===== PHASE 1: PREDICT OPPONENT'S DANGEROUS COMBO LEVELS =====
+    // Based on aether thresholds, predict what opponent will do
+    const OPONENTDANGEROUS_COMBOS = {
+      shield_double_attack: 28,  // Can use SHIELD+DOUBLE_ATTACK combo
+      promote_wall: 33,          // Can use PROMOTE+WALL combo
+      vengeance_attack: 32,      // Can use VENGEANCE+DOUBLE_ATTACK
+      frost_imprison: 22,        // Can use FROST+IMPRISON
+      imprison_attack: 28,       // Can use IMPRISON+DOUBLE_ATTACK
+    };
+
+    // ===== PHASE 2: OPPONENT AT CAP (30 aether) - FORCED SPENDING =====
+    // If opponent at 30 aether, they MUST spend. Weaken them now!
+    if (oppAether === 30) {
+      blockPrio = 500; // HIGH PRIORITY: Limit their options
+      blockReason = 'FORCED_SPEND_AT_CAP';
     }
 
-    // OPTIMIZED Strategy 2: Block when we're about to destroy their queen and they have Chronobreak
-    if (blockPrio === 0 && oppAether >= POWER_COSTS[POWER.CHRONOBREAK]) {
-      const myMoves = allLegalMoves(state.board, forColor, state);
-      for (const mv of myMoves) {
-        const target = state.board[mv.to.r][mv.to.c];
-        if (target && target.color === opp && target.type === PIECE.QUEEN) {
-          blockPrio = 150; // Block chronobreak to secure queen capture
+    // ===== PHASE 3: OPPONENT BUILDING TO DANGEROUS COMBO =====
+    // If opponent has 24-27 aether, they're 1-3 turns from SHIELD+DOUBLE_ATTACK (28)
+    // Block now to prevent them from executing dangerous combo
+    if (blockPrio === 0 && oppAether >= 24 && oppAether <= 27) {
+      // Check if opponent king is vulnerable (would they want to defend or attack?)
+      const oppKing = findKing(state.board, opp);
+      const kingThreats = 0;
+      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (p && p.color === forColor && isSquareAttacked(state.board, oppKing.r, oppKing.c, forColor)) {
           break;
         }
       }
+
+      // If WE have aether for combo (20+), block opponent to prevent THEIR combo
+      if (aether >= 20) {
+        blockPrio = 750; // VERY HIGH: Setup for our own checkmate
+        blockReason = 'SETUP_CHECKMATE_PREEMPT';
+      } else {
+        blockPrio = 400; // HIGH: Just weaken them
+        blockReason = 'WEAKEN_COMBO_BUILDING';
+      }
     }
 
-    // OPTIMIZED Strategy 3: Block escape powers (Blink/Fortify) when we're attacking
-    if (blockPrio === 0 && oppAether >= POWER_COSTS[POWER.FORTIFY]) {
-      // Check if we're attacking high-value opponent pieces
-      let attackingHighValue = false;
-      for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
-        const p = state.board[r][c];
-        if (!p || p.color !== opp || p.type === PIECE.KING) continue;
-        if (BOT_PIECE_VALUES[p.type] >= 500) { // Queen or Rook
-          if (isSquareAttacked(state.board, r, c, forColor)) {
-            attackingHighValue = true;
-            break;
+    // ===== PHASE 4: OPPONENT HAS DANGEROUS AETHER LEVELS =====
+    // Specific threshold blocks for critical powers
+    if (blockPrio === 0) {
+      if (oppAether >= 26) {
+        // Opponent can execute SHIELD+DOUBLE_ATTACK (28) or IMPRISON+DOUBLE_ATTACK
+        // If we detect checkmate threat, block preemptively
+        const myMoves = allLegalMoves(state.board, forColor, state);
+        let mateOrNearMate = false;
+        for (const mv of myMoves) {
+          const snap = snapshot(state.board);
+          state.board[mv.to.r][mv.to.c] = state.board[mv.from.r][mv.from.c];
+          state.board[mv.from.r][mv.from.c] = null;
+          if (isInCheck(state.board, opp)) {
+            const oppMoves = allLegalMoves(state.board, opp, state);
+            if (oppMoves.length <= 2) mateOrNearMate = true;
+          }
+          restore(state.board, snap);
+          if (mateOrNearMate) break;
+        }
+
+        if (mateOrNearMate) {
+          blockPrio = 900; // CRITICAL: Block dangerous combo
+          blockReason = 'BLOCK_CHECKMATE_THREAT';
+        } else {
+          blockPrio = 300; // MEDIUM: Weaken major power
+          blockReason = 'WEAKEN_MAJOR_POWERS';
+        }
+      } else if (oppAether >= POWER_COSTS[POWER.VENGEANCE]) {
+        // Opponent can use VENGEANCE (18)
+        blockPrio = 200;
+        blockReason = 'BLOCK_VENGEANCE';
+      } else if (oppAether >= POWER_COSTS[POWER.WALL]) {
+        // Opponent can use WALL (18) - defensive fortification
+        blockPrio = 150;
+        blockReason = 'BLOCK_FORTRESS_BUILD';
+      } else if (oppAether >= POWER_COSTS[POWER.IMPRISON]) {
+        // Opponent can use IMPRISON (14)
+        blockPrio = 100;
+        blockReason = 'BLOCK_IMPRISON';
+      } else if (oppAether >= POWER_COSTS[POWER.FROST]) {
+        blockPrio = 50;
+        blockReason = 'BLOCK_SMALL_POWERS';
+      }
+    }
+
+    // ===== PHASE 5: DOUBLE BLOCK SCENARIO =====
+    // If opponent is in danger AND has high aether, double-block to guarantee mate
+    if (blockPrio >= 300 && oppAether >= 20 && isInCheck(state.board, opp)) {
+      const oppMoves = allLegalMoves(state.board, opp, state);
+      if (oppMoves.length <= 3) {
+        // Opponent nearly mated - use AETHER_BLOCK to prevent escape power
+        blockPrio = Math.max(blockPrio, 850);
+        blockReason = blockReason + '_DOUBLE_BLOCK';
+      }
+    }
+
+    // ===== PHASE 6: ENABLE OUR CHECKMATE =====
+    // If we have 20+ aether and checkmate is 1-2 turns away, block to setup
+    if (blockPrio < 600 && aether >= 20) {
+      const myMoves = allLegalMoves(state.board, forColor, state);
+      let maybeMateIn2 = false;
+
+      for (const mv of myMoves) {
+        const snap = snapshot(state.board);
+        state.board[mv.to.r][mv.to.c] = state.board[mv.from.r][mv.from.c];
+        state.board[mv.from.r][mv.from.c] = null;
+
+        if (isInCheck(state.board, opp)) {
+          const oppMoves = allLegalMoves(state.board, opp, state);
+          if (oppMoves.length === 0) {
+            maybeMateIn2 = true; // Checkmate!
+          } else {
+            // Check mate in 2
+            for (const opp_mv of oppMoves) {
+              const snap2 = snapshot(state.board);
+              state.board[opp_mv.to.r][opp_mv.to.c] = state.board[opp_mv.from.r][opp_mv.from.c];
+              state.board[opp_mv.from.r][opp_mv.from.c] = null;
+
+              const my2Moves = allLegalMoves(state.board, forColor, state);
+              for (const mv2 of my2Moves) {
+                const snap3 = snapshot(state.board);
+                state.board[mv2.to.r][mv2.to.c] = state.board[mv2.from.r][mv2.from.c];
+                state.board[mv2.from.r][mv2.from.c] = null;
+
+                if (isInCheck(state.board, opp)) {
+                  const final_moves = allLegalMoves(state.board, opp, state);
+                  if (final_moves.length === 0) {
+                    maybeMateIn2 = true;
+                  }
+                }
+                restore(state.board, snap3);
+                if (maybeMateIn2) break;
+              }
+              restore(state.board, snap2);
+              if (maybeMateIn2) break;
+            }
           }
         }
+        restore(state.board, snap);
+        if (maybeMateIn2) break;
       }
-      if (attackingHighValue) {
-        blockPrio = 100; // Block their defensive powers
+
+      if (maybeMateIn2 && oppAether >= 20) {
+        blockPrio = 800; // Use AETHER_BLOCK to setup our mate
+        blockReason = 'ENABLE_OUR_CHECKMATE';
       }
     }
 
-    // Strategy 4: Block when opponent is close to dangerous powers (original logic, enhanced)
-    if (blockPrio === 0) {
-      const oppThreshold = POWER_COSTS[POWER.FROST]; // 8 — they can start using powers
-      if (oppAether >= oppThreshold) {
-        blockPrio = 25;
-        if (oppAether >= POWER_COSTS[POWER.VENGEANCE]) blockPrio = 65;
-        else if (oppAether >= POWER_COSTS[POWER.PROMOTE]) blockPrio = 55;
-        else if (oppAether >= POWER_COSTS[POWER.IMPRISON]) blockPrio = 40;
-      }
-
-      // OPTIMIZED: Don't use if opponent has low aether anyway
-      if (oppAether < POWER_COSTS[POWER.FROST]) blockPrio = 0;
-    }
-
+    // ===== FINAL: ADD AETHER_BLOCK CANDIDATE =====
     if (blockPrio > 0) {
       candidates.push({
         priority: blockPrio,
         exec: () => castAetherBlock(state),
-        name: 'AETHER_BLOCK',
-        payload: { power: 'AETHER_BLOCK' }
+        name: 'AETHER_BLOCK_' + blockReason,
+        payload: { power: 'AETHER_BLOCK', reason: blockReason, oppAether }
       });
+
+      // Diagnostic logging for high-priority blocks
+      if (blockPrio >= 600) {
+        console.error(`[AETHER_BLOCK] Priority=${blockPrio} Reason=${blockReason} OppA=${oppAether} MyA=${aether}`);
+      }
     }
   }
 
