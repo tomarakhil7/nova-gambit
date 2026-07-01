@@ -4210,6 +4210,12 @@ function botConsiderPowers(state, forColor) {
   // Sort by priority, pick the best (or random for easy)
   candidates.sort((a, b) => b.priority - a.priority);
 
+  // CRITICAL FIX: Check if candidates array is empty BEFORE accessing elements
+  if (candidates.length === 0) {
+    if (aether >= 14) console.error(`  No power candidates available at ${aether}/30 aether`);
+    return null;
+  }
+
   if (candidates.length > 0 && aether >= 14) {
     const top3 = candidates.slice(0,3).map(c=>`${c.name}(${c.priority.toFixed(0)})`).join(' ');
     console.error(`  Candidates: ${top3}`);
@@ -4230,8 +4236,8 @@ function botConsiderPowers(state, forColor) {
 
   // Hard: use powers strategically — balance spending vs saving for bigger powers
   const best = candidates[0];
-  if (best.priority < 15) {
-    if (aether >= 14) console.error(`  → SKIP low prio`);
+  if (!best || best.priority < 15) {
+    if (aether >= 14) console.error(`  → SKIP ${best ? 'low prio' : 'null candidate'}`);
     return null;
   }
 
