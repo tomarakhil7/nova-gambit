@@ -1398,8 +1398,10 @@ function renderPowerButtons() {
 function renderLog() {
   const log = document.getElementById('log');
   log.innerHTML = '';
-  const entries = UI.state.log.slice(-50);
-  for (const line of entries) {
+  const entries = UI.state.log.slice(-200); // Show full game log (up to 200 entries)
+  // Reverse: most recent events at the top
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const line = entries[i];
     const div = document.createElement('div');
     div.className = 'log-entry';
     if (/checkmate|dead-man|self-destruct|king destroyed|timeout/i.test(line)) div.classList.add('danger');
@@ -1408,7 +1410,7 @@ function renderLog() {
     div.textContent = line;
     log.appendChild(div);
   }
-  log.scrollTop = log.scrollHeight;
+  log.scrollTop = 0; // Most recent is at top, no need to scroll down
 }
 
 function renderTurnIndicator() {

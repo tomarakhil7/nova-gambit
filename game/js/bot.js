@@ -816,11 +816,26 @@ function botEvaluate(state, forColor) {
           }
         }
       }
+      // PROMOTE POWER THREAT: If a pawn's owner has 15+ aether, it can become a Queen instantly
+      // This adds threat weight to enemy advanced pawns and value to our own
+      if (p.type === PIECE.PAWN) {
+        const advRank = p.color === COLOR.WHITE ? (7 - r) : r;
+        if (advRank >= 3) {
+          if (p.color !== forColor && state.mana[opp] >= 15) {
+            score -= 35 + (advRank * 12); // enemy pawn with PROMOTE = hidden queen threat
+          } else if (p.color === forColor && state.mana[forColor] >= 15) {
+            score += 25 + (advRank * 8); // our pawn with PROMOTE = latent queen
+          }
+        }
+      }
     }
   }
 
   // Aether advantage (scaled down in endgame — pieces matter more)
   score += (state.mana[forColor] - state.mana[opp]) * (phase > 0.5 ? 8 : 4);
+
+  // ===== PROMOTE POWER THREAT AWARENESS (integrated into material count above) =====
+  // Handled via promoteThreat accumulator in the main piece loop - see below
 
   // Center control bonus (less important in endgame)
   if (controlsCenter(state, forColor)) score += 30 * phase;
@@ -1475,6 +1490,41 @@ function botIsKiller(depth, m) {
   return false;
 }
 
+// Power safety check: validates that a board state resulting from a power cast
+// does not leave our Queen undefended-and-attacked or our King in check.
+// Returns 0 if safe, negative penalty if dangerous.
+// MUST be called with the board ALREADY in the post-power state (caller snapshots/restores).
+function botPowerSafetyCheck(board, forColor) {
+  const opp = forColor === COLOR.WHITE ? COLOR.BLACK : COLOR.WHITE;
+  let penalty = 0;
+
+  // 1. Check if our King is in check (should never happen but safety net)
+  const king = findKing(board, forColor);
+  if (king && isSquareAttacked(board, king.r, king.c, opp)) {
+    penalty -= 9999; // Absolutely never allow self-check
+    return penalty;  // Early exit - nothing worse than this
+  }
+
+  // 2. Check if our Queen is now attacked and undefended
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const p = board[r][c];
+      if (!p || p.color !== forColor) continue;
+      if (p.type === PIECE.QUEEN) {
+        if (isSquareAttacked(board, r, c, opp) && !isSquareAttacked(board, r, c, forColor)) {
+          // Queen attacked and undefended - massive penalty (loss of ~9 material)
+          penalty -= 900;
+        } else if (isSquareAttacked(board, r, c, opp)) {
+          // Queen attacked but defended - still risky (trade scenarios)
+          penalty -= 200;
+        }
+      }
+    }
+  }
+
+  return penalty;
+}
+
 // Quick move-ordering score (no board copies — pure heuristics)
 // Used in inner tree nodes: MUST be fast (no isSquareAttacked calls)
 // Now includes killer/history bonuses for better pruning.
@@ -1597,6 +1647,64 @@ function botRootOrderScore(state, m, forColor) {
       // Piece is currently under attack — check if destination is safe
       if (!isSquareAttacked(state.board, m.to.r, m.to.c, opp)) {
         s += pieceVal * 2; // Retreating saves the piece: high priority
+      }
+    }
+  }
+
+  // ===== CHRONOBREAK-RESILIENT MOVE EVALUATION =====
+  // When opponent has 20+ aether (CHRONOBREAK cost), they can undo our ENTIRE turn.
+  // Strategy: prefer moves that are STILL good even if undone, or that bait CHRONOBREAK
+  // on low-value moves so opponent wastes 20 aether for little gain.
+  const oppAether = state.mana[opp];
+  if (oppAether >= 20 && !state.aetherBlocked[opp]) {
+    // Opponent CAN use CHRONOBREAK - adjust move scoring
+
+    // 1. DISCOUNT big captures: if opponent undoes this, we lost tempo AND aether
+    //    Queen capture (+900) → still worth doing but discount by 20%
+    //    Rook capture (+500) → discount by 15%
+    //    This makes the bot prefer CERTAIN gains over reversible ones
+    if (target && target.color !== piece.color) {
+      const captureVal = BOT_PIECE_VALUES[target.type];
+      if (captureVal >= 900) {
+        // Queen capture: opponent WILL CHRONOBREAK this. Discount unless we used AETHER_BLOCK
+        s -= captureVal * 0.15; // 15% penalty on big captures under CHRONOBREAK threat
+      } else if (captureVal >= 500) {
+        // Rook capture: likely CHRONOBREAK target too
+        s -= captureVal * 0.10; // 10% penalty
+      }
+      // Minor piece captures (300): usually not worth opponent spending 20ae to undo
+    }
+
+    // 2. BOOST multi-threat moves: even if undone, opponent used CHRONOBREAK defensively
+    //    Moves that create multiple threats (fork-like) are CHRONOBREAK-resistant
+    //    because undoing one threat doesn't remove the positional pressure
+    if (!target || target.color === piece.color) {
+      // Non-capture positional move - these are CHRONOBREAK-resistant
+      // Boost positional improvements that DON'T depend on capturing something
+      if (piece.type === PIECE.KNIGHT || piece.type === PIECE.BISHOP) {
+        // Centralization is CHRONOBREAK-proof: even if undone, opponent wasted 20 aether
+        const centerDist = Math.abs(m.to.r - 3.5) + Math.abs(m.to.c - 3.5);
+        if (centerDist <= 2) {
+          s += 25; // Boost central placement under CHRONOBREAK threat
+        }
+      }
+    }
+
+    // 3. CHRONOBREAK BAIT: a move that LOOKS valuable to undo but actually isn't
+    //    If we move a piece to a strong square AND create a secondary threat,
+    //    opponent wastes CHRONOBREAK on this move while our real plan proceeds next turn
+    if (piece.type !== PIECE.PAWN && !target) {
+      // Non-capture that creates a check or attack on high-value piece
+      const snap = snapshot(state.board);
+      state.board[m.to.r][m.to.c] = state.board[m.from.r][m.from.c];
+      state.board[m.from.r][m.from.c] = null;
+      const givesCheck = isInCheck(state.board, opp);
+      restore(state.board, snap);
+
+      if (givesCheck) {
+        // Checking move that doesn't capture = excellent CHRONOBREAK bait
+        // Opponent undoes the check (costs 20ae) but we still have all our pieces
+        s += 40; // Boost "free" checks under CHRONOBREAK threat
       }
     }
   }
@@ -2769,22 +2877,52 @@ function botConsiderPowers(state, forColor) {
       const piece = state.board[target.r][target.c];
       if (piece) {
         const safeMoves = legalMoves(state.board, target.r, target.c, state).filter(m => {
-          // Check if destination is safe
+          // Check if destination is safe AND vacating source doesn't expose other pieces
           const snap = snapshot(state.board);
           state.board[m.r][m.c] = piece;
           state.board[target.r][target.c] = null;
           const safe = !isSquareAttacked(state.board, m.r, m.c, opp);
+          if (!safe) { restore(state.board, snap); return false; }
+          // Check if vacating the source square exposes our King, Queen, or Rook
+          let exposesHVP = false;
+          for (let hr = 0; hr < 8 && !exposesHVP; hr++) {
+            for (let hc = 0; hc < 8 && !exposesHVP; hc++) {
+              const hp = state.board[hr][hc];
+              if (!hp || hp.color !== forColor) continue;
+              if (hp.type !== PIECE.KING && hp.type !== PIECE.QUEEN && hp.type !== PIECE.ROOK) continue;
+              if (hr === m.r && hc === m.c) continue; // skip the piece we just moved
+              if (isSquareAttacked(state.board, hr, hc, opp)) {
+                // Verify it was NOT attacked before the blink
+                state.board[target.r][target.c] = piece;
+                state.board[m.r][m.c] = null;
+                const wasBefore = isSquareAttacked(state.board, hr, hc, opp);
+                state.board[m.r][m.c] = piece;
+                state.board[target.r][target.c] = null;
+                if (!wasBefore) exposesHVP = true;
+              }
+            }
+          }
           restore(state.board, snap);
-          return safe;
+          return !exposesHVP;
         });
 
         if (safeMoves.length > 0) {
-          candidates.push({
-            priority: 600, // Very high priority - save Queen!
-            exec: () => castBlink(state, target.r, target.c, safeMoves[0].r, safeMoves[0].c),
-            name: 'THREAT_RESPONSE_BLINK',
-            payload: { power: 'BLINK', threat: criticalThreat }
-          });
+          // Post-cast safety check: simulate the blink and verify resulting position
+          const bestSafe = safeMoves[0];
+          const snapSafety = snapshot(state.board);
+          state.board[bestSafe.r][bestSafe.c] = piece;
+          state.board[target.r][target.c] = null;
+          const safetyPenalty = botPowerSafetyCheck(state.board, forColor);
+          restore(state.board, snapSafety);
+          const blinkPriority = Math.max(0, 600 + safetyPenalty);
+          if (blinkPriority > 0) {
+            candidates.push({
+              priority: blinkPriority,
+              exec: () => castBlink(state, target.r, target.c, bestSafe.r, bestSafe.c),
+              name: 'THREAT_RESPONSE_BLINK',
+              payload: { power: 'BLINK', threat: criticalThreat }
+            });
+          }
         }
       }
     }
@@ -2907,6 +3045,9 @@ function botConsiderPowers(state, forColor) {
       const p = state.board[r][c];
       if (p && p.color === forColor && p.type === PIECE.PAWN && !p.isSpectral) {
         const distToPromo = forColor === COLOR.WHITE ? r : (7 - r);
+        // CRITICAL FIX: Only promote pawns that are on 6th rank (distToPromo === 1)
+        // Promoting pawns further away is an error (promotes non-eligible pawns)
+        if (distToPromo > 1) continue;
         const attacked = isSquareAttacked(state.board, r, c, opp);
         const defended = isSquareAttacked(state.board, r, c, forColor);
         const safe = !attacked || defended;
@@ -3421,9 +3562,16 @@ function botConsiderPowers(state, forColor) {
   }
 
   // BLINK: Multi-purpose teleport - escape, attack, checkmate delivery
+  // OPENING GUARD: In first 12 turns (phase >= 0.8), only BLINK to save pieces worth 300+ (Knight/Bishop+)
+  // This prevents wasteful repositioning blinks that lose tempo and expose pieces
+  const blinkEarlyGameGuard = (state.turnNumber && state.turnNumber <= 12 && phase >= 0.8);
   if (aether >= POWER_COSTS[POWER.BLINK]) {
     let bestBlink = null, bestBlinkScore = 0, bestReason = null;
     const oppKing = findKing(state.board, opp);
+    // Pre-locate our King and Queen for fast safety checks (avoids O(64) scan per candidate)
+    const blinkMyKing = findKing(state.board, forColor);
+    let blinkMyQueen = null;
+    for (let qr = 0; qr < 8; qr++) { for (let qc = 0; qc < 8; qc++) { const qp = state.board[qr][qc]; if (qp && qp.color === forColor && qp.type === PIECE.QUEEN) { blinkMyQueen = { r: qr, c: qc }; break; } } if (blinkMyQueen) break; }
 
     for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
       const p = state.board[r][c];
@@ -3452,21 +3600,46 @@ function botConsiderPowers(state, forColor) {
         if (nr === r && nc === c) continue;
         if (state.board[nr][nc]) continue;
 
-        // SAFETY CHECK: simulate the blink and verify landing square isn't en-prise
+        // SAFETY CHECK: simulate the blink and verify position isn't dangerous
         const snap = snapshot(state.board);
         state.board[nr][nc] = p;
         state.board[r][c] = null;
         const attackedAfter = isSquareAttacked(state.board, nr, nc, opp);
         const defendedAfter = isSquareAttacked(state.board, nr, nc, forColor);
 
+        // CRITICAL FIX: Check if removing piece from (r,c) EXPOSES our high-value pieces
+        // Only check our pre-located King and Queen (fast O(1) check, not O(64))
+        let exposesOwnPieces = false;
+        // Check King safety first (absolute priority)
+        if (blinkMyKing && isSquareAttacked(state.board, blinkMyKing.r, blinkMyKing.c, opp)) {
+          exposesOwnPieces = true;
+        }
+        // Check Queen safety (only if we have one and it's not the piece being blinked)
+        if (!exposesOwnPieces && blinkMyQueen && !(blinkMyQueen.r === r && blinkMyQueen.c === c)) {
+          if (isSquareAttacked(state.board, blinkMyQueen.r, blinkMyQueen.c, opp)) {
+            // Was it attacked before? Only flag if NEWLY exposed
+            const snapQ = snapshot(state.board);
+            state.board[r][c] = p;
+            state.board[nr][nc] = null;
+            if (!isSquareAttacked(state.board, blinkMyQueen.r, blinkMyQueen.c, opp)) {
+              exposesOwnPieces = true; // Queen NEWLY attacked after blink
+            }
+            restore(state.board, snapQ);
+          }
+        }
+
         // OPTIMIZED: Check if blinking to deliver checkmate
         let deliversMate = false;
-        if (isInCheck(state.board, opp)) {
+        if (!exposesOwnPieces && isInCheck(state.board, opp)) {
           const oppMoves = allLegalMoves(state.board, opp, state);
           if (oppMoves.length === 0) deliversMate = true;
         }
 
         restore(state.board, snap);
+
+        // REJECT blinks that expose our own pieces (unless it delivers checkmate)
+        if (exposesOwnPieces && !deliversMate) continue;
+
         const myValue = BOT_PIECE_VALUES[p.type] || 0;
         if (attackedAfter && (myValue >= 4 || !defendedAfter) && !deliversMate) continue;
 
@@ -3542,13 +3715,23 @@ function botConsiderPowers(state, forColor) {
         }
       }
     }
-    if (bestBlink && bestBlinkScore > 50) {
-      candidates.push({
-        priority: bestBlinkScore,
-        exec: () => castBlink(state, bestBlink.fromR, bestBlink.fromC, bestBlink.toR, bestBlink.toC),
-        name: 'BLINK',
-        payload: { power: 'BLINK', from: { r: bestBlink.fromR, c: bestBlink.fromC }, to: { r: bestBlink.toR, c: bestBlink.toC } }
-      });
+    if (bestBlink && bestBlinkScore > 100) {
+      // OPENING GUARD: In early game, only allow blinks that save valuable pieces or deliver mate
+      // Reject "fountain", "general", "fork" repositioning blinks in the opening
+      if (blinkEarlyGameGuard && bestReason !== 'escape' && bestReason !== 'checkmate' && bestReason !== 'bomb-escape') {
+        // Skip this blink - too early in the game for repositioning
+        // Save aether for more impactful midgame powers
+      } else {
+        // LAYER 4: Apply anti-hoarding multiplier (same as VENGEANCE)
+        // Raised threshold from 50 to 100 to prevent trivial repositioning plays
+        let blinkPrio = bestBlinkScore * hoardingMultiplier;
+        candidates.push({
+          priority: blinkPrio,
+          exec: () => castBlink(state, bestBlink.fromR, bestBlink.fromC, bestBlink.toR, bestBlink.toC),
+          name: 'BLINK',
+          payload: { power: 'BLINK', from: { r: bestBlink.fromR, c: bestBlink.fromC }, to: { r: bestBlink.toR, c: bestBlink.toC }, reason: bestReason }
+        });
+      }
     }
   }
 
@@ -3814,12 +3997,20 @@ function botConsiderPowers(state, forColor) {
       if (state.board[f.r][f.c]) continue;
       const rankFP = forColor === COLOR.WHITE ? (8 - f.r) : (f.r + 1);
       if (rankFP >= 1 && rankFP <= 4) {
-        candidates.push({
-          priority: 15,
-          exec: () => castSpawn(state, f.r, f.c),
-          name: 'SPAWN',
-          payload: { power: 'SPAWN', r: f.r, c: f.c }
-        });
+        // Post-cast safety check: simulate placing spectral pawn and verify position
+        const snapSpawn = snapshot(state.board);
+        state.board[f.r][f.c] = makePiece(PIECE.PAWN, forColor);
+        const spawnPenalty = botPowerSafetyCheck(state.board, forColor);
+        restore(state.board, snapSpawn);
+        const spawnPriority = Math.max(0, 15 + spawnPenalty);
+        if (spawnPriority > 0) {
+          candidates.push({
+            priority: spawnPriority,
+            exec: () => castSpawn(state, f.r, f.c),
+            name: 'SPAWN',
+            payload: { power: 'SPAWN', r: f.r, c: f.c }
+          });
+        }
         break;
       }
     }
@@ -3902,6 +4093,21 @@ function botConsiderPowers(state, forColor) {
         } else {
           blockPrio = 300; // MEDIUM: Weaken major power
           blockReason = 'WEAKEN_MAJOR_POWERS';
+        }
+      } else if (oppAether >= POWER_COSTS[POWER.CHRONOBREAK]) {
+        // CHRONOBREAK PREDICTION: Opponent has 20+ aether - can undo our entire turn!
+        // This is the most dangerous power - it nullifies ANY move we make
+        // If we just captured something valuable or made a strong move, opponent WILL use it
+        // Strategy: Block BEFORE we make a devastating move so they can't undo it
+        const myMat = botCountMaterial(state, forColor);
+        const oppMat = botCountMaterial(state, opp);
+        if (myMat > oppMat + 200) {
+          // We're ahead in material - opponent will CHRONOBREAK our last capture
+          blockPrio = 650; // HIGH: Protect our material advantage
+          blockReason = 'BLOCK_CHRONOBREAK_PROTECT_LEAD';
+        } else {
+          blockPrio = 350; // MEDIUM-HIGH: Deny time reversal option
+          blockReason = 'BLOCK_CHRONOBREAK_DENIAL';
         }
       } else if (oppAether >= POWER_COSTS[POWER.VENGEANCE]) {
         // Opponent can use VENGEANCE (18)
@@ -4044,19 +4250,40 @@ function botConsiderPowers(state, forColor) {
       }
     }
     if (bestBomba && bestBombaScore >= 150) {
-      candidates.push({
-        priority: bestBombaScore * 0.12,
-        exec: () => castBomba(state, bestBomba.r, bestBomba.c),
-        name: 'BOMBA',
-        payload: { power: 'BOMBA', r: bestBomba.r, c: bestBomba.c }
-      });
+      // Post-cast safety check: verify own high-value pieces are not in blast radius
+      let bombaSelfHarm = 0;
+      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+        const nr = bestBomba.r + dr, nc = bestBomba.c + dc;
+        if (!inBounds(nr, nc)) continue;
+        const p = state.board[nr][nc];
+        if (p && p.color === forColor) {
+          if (p.type === PIECE.KING) bombaSelfHarm -= 9999;
+          else if (p.type === PIECE.QUEEN) bombaSelfHarm -= 900;
+          else if (p.type === PIECE.ROOK) bombaSelfHarm -= 500;
+        }
+      }
+      // Also run general position safety (bomb placement itself on the board)
+      const snapBomba = snapshot(state.board);
+      state.board[bestBomba.r][bestBomba.c] = makePiece(PIECE.PAWN, forColor); // Simulate bomb occupying square
+      const bombaPositionPenalty = botPowerSafetyCheck(state.board, forColor);
+      restore(state.board, snapBomba);
+      const bombaPriority = Math.max(0, bestBombaScore * 0.12 + bombaSelfHarm + bombaPositionPenalty);
+      if (bombaPriority > 0) {
+        candidates.push({
+          priority: bombaPriority,
+          exec: () => castBomba(state, bestBomba.r, bestBomba.c),
+          name: 'BOMBA',
+          payload: { power: 'BOMBA', r: bestBomba.r, c: bestBomba.c }
+        });
+      }
     }
   }
 
   // CHRONOBREAK: Undo opponent's last turn to recover from devastating moves
-  // High priority when we lost material, got checked, or opponent used powerful moves
+  // Enhanced: now also considers positional damage, AETHER_BLOCK undo, and counterplay denial
   if (aether >= POWER_COSTS[POWER.CHRONOBREAK] && state.history && state.history.length >= 2) {
     let chronoPriority = 0;
+    let chronoReason = '';
     const myMat = botCountMaterial(state, forColor);
     const oppMat = botCountMaterial(state, opp);
     const materialDeficit = oppMat - myMat;
@@ -4073,37 +4300,91 @@ function botConsiderPowers(state, forColor) {
         const capturedPiece = action.payload.captured;
         if (capturedPiece && capturedPiece.color === forColor) {
           // +100 if opponent captured our Queen last turn
-          if (capturedPiece.type === PIECE.QUEEN) chronoPriority += 100;
+          if (capturedPiece.type === PIECE.QUEEN) {
+            chronoPriority += 100;
+            chronoReason = 'UNDO_QUEEN_CAPTURE';
+          }
           // +80 if opponent captured our Rook last turn
-          else if (capturedPiece.type === PIECE.ROOK) chronoPriority += 80;
+          else if (capturedPiece.type === PIECE.ROOK) {
+            chronoPriority += 80;
+            chronoReason = chronoReason || 'UNDO_ROOK_CAPTURE';
+          }
           // +40 per other piece captured last turn
-          else if (capturedPiece.type !== PIECE.PAWN) chronoPriority += 40;
+          else if (capturedPiece.type !== PIECE.PAWN) {
+            chronoPriority += 40;
+            chronoReason = chronoReason || 'UNDO_PIECE_CAPTURE';
+          }
         }
       }
 
-      // +60 if opponent used Vengeance/Promote last turn (game-changing powers)
+      // +60 if opponent used game-changing powers last turn
       if (action.type === 'POWER_CAST' && action.payload) {
         const powerUsed = action.payload.power;
-        if (powerUsed === POWER.VENGEANCE) chronoPriority += 60;
-        else if (powerUsed === POWER.PROMOTE) chronoPriority += 60;
-        else if (powerUsed === POWER.IMPRISON) chronoPriority += 50;
+        if (powerUsed === POWER.VENGEANCE) {
+          chronoPriority += 60;
+          chronoReason = chronoReason || 'UNDO_VENGEANCE';
+        } else if (powerUsed === POWER.PROMOTE) {
+          chronoPriority += 70; // Promote is devastating - high priority undo
+          chronoReason = chronoReason || 'UNDO_PROMOTE';
+        } else if (powerUsed === POWER.IMPRISON) {
+          chronoPriority += 50;
+          chronoReason = chronoReason || 'UNDO_IMPRISON';
+        } else if (powerUsed === POWER.AETHER_BLOCK) {
+          // Opponent AETHER_BLOCKED us! Undo it to reclaim our aether access
+          chronoPriority += 55;
+          chronoReason = chronoReason || 'UNDO_AETHER_BLOCK';
+        } else if (powerUsed === POWER.BOMBA) {
+          chronoPriority += 45;
+          chronoReason = chronoReason || 'UNDO_BOMBA';
+        }
       }
     }
 
-    // +50 if opponent put us in check last turn
-    if (isInCheck(state.board, forColor)) chronoPriority += 50;
+    // +50 if opponent put us in check last turn (tempo loss)
+    if (isInCheck(state.board, forColor)) {
+      chronoPriority += 50;
+      chronoReason = chronoReason || 'UNDO_CHECK';
+    }
+
+    // PROACTIVE: If opponent gained positional advantage (controlled key squares/fountains)
+    // Check if opponent moved a piece to a fountain square last turn
+    if (state.fountains && recentActions.length > 0) {
+      for (const action of recentActions) {
+        if (action && action.by === opp && action.type === 'MOVE' && action.payload) {
+          const toR = action.payload.toR || (action.payload.to && action.payload.to.r);
+          const toC = action.payload.toC || (action.payload.to && action.payload.to.c);
+          if (toR !== undefined && toC !== undefined) {
+            const landedOnFountain = state.fountains.some(f => f.r === toR && f.c === toC);
+            if (landedOnFountain) {
+              chronoPriority += 30; // Undo fountain grab (denies +2ae/turn)
+              chronoReason = chronoReason || 'UNDO_FOUNTAIN_GRAB';
+            }
+          }
+        }
+      }
+    }
 
     // Extra urgency if we're in a losing position (down 300+ material)
-    if (materialDeficit >= 300) chronoPriority += 30;
+    if (materialDeficit >= 300) {
+      chronoPriority += 30;
+      chronoReason = chronoReason || 'MATERIAL_DEFICIT';
+    }
 
-    // Hard mode: cast Chronobreak if priority >= 80 OR we're losing badly (down 300+)
+    // COUNTER-STRATEGY: Don't CHRONOBREAK if opponent can re-CHRONOBREAK us back
+    // (They can't - rule says you can't CHRONOBREAK a CHRONOBREAK, so this is safe)
+
+    // Hard mode: cast Chronobreak if priority >= 80
     if (BOT.difficulty === 'hard' && chronoPriority >= 80) {
       candidates.push({
         priority: chronoPriority,
         exec: () => castChronobreak(state),
         name: 'CHRONOBREAK',
-        payload: { power: 'CHRONOBREAK' }
+        payload: { power: 'CHRONOBREAK', reason: chronoReason }
       });
+
+      if (chronoPriority >= 60) {
+        console.error(`[CHRONOBREAK] Priority=${chronoPriority} Reason=${chronoReason} MyMat=${myMat} OppMat=${oppMat}`);
+      }
     }
   }
 
@@ -4207,6 +4488,19 @@ function botConsiderPowers(state, forColor) {
     }
   }
 
+  // --- APPLY ANTI-HOARDING MULTIPLIER TO ALL CANDIDATES (Before sorting) ---
+  // The multiplier was previously only applied to VENGEANCE and BLINK
+  // This caused the bot to hoard aether at cap instead of spending it on any power
+  // Now apply 4.0x-1.5x scaling to ALL candidates when near/at cap
+  if (aether >= 22) {
+    for (const cand of candidates) {
+      cand.priority *= hoardingMultiplier;
+    }
+    if (aether >= 28) {
+      console.error(`[HOARDING MULT] Applied ${hoardingMultiplier.toFixed(1)}x to ${candidates.length} powers at ${aether}/30`);
+    }
+  }
+
   // Sort by priority, pick the best (or random for easy)
   candidates.sort((a, b) => b.priority - a.priority);
 
@@ -4242,6 +4536,18 @@ function botConsiderPowers(state, forColor) {
   }
 
   const aetherNow = state.mana[forColor];
+
+  // FIX #3: Force VENGEANCE at HIGH aether to prevent waste at cap
+  // When aether >= 24, bot MUST spend to avoid generation waste
+  // Find the best VENGEANCE candidate and force it
+  if (aetherNow >= 24 && aetherNow < AETHER_CAP) {
+    const vengeanceCandidate = candidates.find(c => c.name === 'VENGEANCE');
+    if (vengeanceCandidate && vengeanceCandidate.priority >= 30) {
+      console.error(`  → FORCED_VENGEANCE at ${aetherNow}/30 aether (anti-waste)`);
+      return vengeanceCandidate;
+    }
+  }
+
   const isBigPower = best.name === 'VENGEANCE' || best.name === 'PROMOTE' || best.name === 'WALL';
   const isMidPower = best.name === 'IMPRISON' || best.name === 'DOUBLE_ATTACK' || best.name === 'CLEANSE' || best.name === 'AETHER_BLOCK' || best.name === 'BOMBA';
 
@@ -4564,7 +4870,13 @@ function botExecuteTurn() {
       if (powersCastThisTurn === 0 || powerAction.priority >= END_TURN_PRIORITY_THRESHOLD) {
         const res = powerAction.exec();
         if (res && res.success) {
-          if (typeof recordAction === 'function') recordAction('POWER_CAST', color, powerAction.payload || { power: powerAction.name });
+          // FIX: Ensure power name is always captured in game log
+          const logPayload = powerAction.payload || { power: powerAction.name };
+          if (!logPayload.power && powerAction.payload) {
+            // Fallback: extract power name from payload structure if not present
+            logPayload.power = powerAction.payload.power || powerAction.name;
+          }
+          if (typeof recordAction === 'function') recordAction('POWER_CAST', color, logPayload);
           setStatus(`Bot cast ${powerAction.name}!`, 'ok');
           render();
           powersCastThisTurn++;
@@ -4584,7 +4896,13 @@ function botExecuteTurn() {
       if (powersCastThisTurn === 0 || powerAction.priority >= CONTINUE_TURN_PRIORITY_THRESHOLD) {
         const res = powerAction.exec();
         if (res && res.success) {
-          if (typeof recordAction === 'function') recordAction('POWER_CAST', color, powerAction.payload || { power: powerAction.name });
+          // FIX: Ensure power name is always captured in game log
+          const logPayload = powerAction.payload || { power: powerAction.name };
+          if (!logPayload.power && powerAction.payload) {
+            // Fallback: extract power name from payload structure if not present
+            logPayload.power = powerAction.payload.power || powerAction.name;
+          }
+          if (typeof recordAction === 'function') recordAction('POWER_CAST', color, logPayload);
           setStatus(`Bot cast ${powerAction.name}!`, 'ok');
           render();
           powersCastThisTurn++;
@@ -4624,7 +4942,12 @@ function botExecuteTurn() {
     if (isInCheck(UI.state.board, color)) {
       const escaped = botEmergencyEscape(UI.state, color);
       if (escaped) {
-        if (typeof recordAction === 'function') recordAction('POWER_CAST', color, escaped.payload || { power: escaped.name });
+        // FIX: Ensure power name is always captured in game log
+        const logPayload = escaped.payload || { power: escaped.name };
+        if (!logPayload.power && escaped.payload) {
+          logPayload.power = escaped.payload.power || escaped.name;
+        }
+        if (typeof recordAction === 'function') recordAction('POWER_CAST', color, logPayload);
         setStatus(`Bot used ${escaped.name} to escape check!`, 'ok');
         render();
       } else {
