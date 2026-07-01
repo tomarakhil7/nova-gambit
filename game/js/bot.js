@@ -831,8 +831,10 @@ function botEvaluate(state, forColor) {
     }
   }
 
-  // Aether advantage (scaled down in endgame — pieces matter more)
-  score += (state.mana[forColor] - state.mana[opp]) * (phase > 0.5 ? 8 : 4);
+  // Aether advantage (scaled by phase — aether is CRITICAL in midgame for power combos)
+  // Each aether point enables powers that can destroy pieces (900cp) or save them.
+  // 1 aether ≈ 12cp in midgame (10 aether = 120cp ≈ pawn + half bishop advantage)
+  score += (state.mana[forColor] - state.mana[opp]) * (phase > 0.5 ? 12 : 6);
 
   // ===== PROMOTE POWER THREAT AWARENESS (integrated into material count above) =====
   // Handled via promoteThreat accumulator in the main piece loop - see below
@@ -841,17 +843,20 @@ function botEvaluate(state, forColor) {
   if (controlsCenter(state, forColor)) score += 30 * phase;
   if (controlsCenter(state, opp)) score -= 30 * phase;
 
-  // Fountain occupation bonus (increased priority for aether economy)
+  // Fountain occupation bonus — fountains give +2 aether/turn which compounds massively.
+  // Over 10 turns: +20 aether = one CHRONOBREAK or VENGEANCE. Value > minor piece.
   const myFountains = occupiedFountains(state, forColor);
   const oppFountains = occupiedFountains(state, opp);
-  score += myFountains * 60;
-  score -= oppFountains * 60;
+  // Phase-scaled: most valuable in midgame when powers decide games
+  const fountainVal = phase > 0.5 ? 150 : (phase > 0.3 ? 100 : 60);
+  score += myFountains * fountainVal;
+  score -= oppFountains * fountainVal;
 
   // Fountain control strategic bonus (exponential scaling for multiple fountains)
-  if (phase >= 0.4 && phase <= 0.8) {
-    // Midgame: fountain control is critical for aether economy
-    if (myFountains >= 2) score += myFountains * myFountains * 20; // exponential bonus
-    if (oppFountains >= 2) score -= oppFountains * oppFountains * 20;
+  if (phase >= 0.3) {
+    // Midgame+: fountain control is critical for aether economy
+    if (myFountains >= 2) score += myFountains * myFountains * 30; // exponential bonus
+    if (oppFountains >= 2) score -= oppFountains * oppFountains * 30;
   }
 
   // Check bonus (higher in endgame — checks are more forcing)
@@ -1694,8 +1699,14 @@ function botRootOrderScore(state, m, forColor) {
   const target = state.board[m.to.r][m.to.c];
 
   // Fountain priority at root level (strategic control)
+  // Fountains give +2 aether/turn = 24cp/turn at our valuation. Over 5 turns = 120cp.
+  // Occupying a fountain early is like gaining a pawn's worth of advantage.
   if (state.fountains.some(f => f.r === m.to.r && f.c === m.to.c)) {
-    s += 30; // bonus for moves landing on fountains
+    const fountainPhase = botGamePhase(state);
+    const fountainBoost = fountainPhase > 0.5 ? 120 : 60; // Higher in midgame
+    s += fountainBoost;
+    // Extra bonus if fountain is unoccupied (capturing it from nobody)
+    if (!target) s += 40;
   }
 
   if (target && target.color !== piece.color) {
@@ -2158,6 +2169,7 @@ function botSearchBestMove(state, moves, forColor) {
     }
 
     let moveIdx = 0;
+    let iterationComplete = true;
     for (const { m } of orderedCandidates) {
       moveIdx++;
       const snap = snapshot(state.board);
@@ -2206,11 +2218,20 @@ function botSearchBestMove(state, moves, forColor) {
       if (score > alpha) alpha = score;
 
       // Time check mid-iteration: stop if running out of time
-      if (Date.now() - startTime > maxTime * 0.8) break;
+      if (Date.now() - startTime > maxTime * 0.8) {
+        iterationComplete = false;
+        break;
+      }
     }
 
-    bestMove = iterBest;
-    bestScore = iterScore;
+    // CRITICAL FIX: Only update bestMove from this iteration if:
+    // 1. The iteration completed fully, OR
+    // 2. We evaluated enough moves (at least half the candidates) to have a reliable result
+    // This prevents an incomplete shallow scan from overriding a fully-completed deeper result
+    if (iterationComplete || moveIdx >= Math.max(5, orderedCandidates.length / 2)) {
+      bestMove = iterBest;
+      bestScore = iterScore;
+    }
 
     // Time check: don't start next depth if we've used > 50% of budget
     // (more conservative to ensure we complete the current depth)
@@ -3503,8 +3524,11 @@ function botConsiderPowers(state, forColor) {
       restore(state.board, snap);
 
       if (canCapitalize || bestScore >= 400) { // High-value freezes don't need follow-up
+        // FROST priority: reduced to prevent spam. Only high-value for mate threats or near-cap aether.
+        // A freeze is temporary (1 turn), so priority should be much lower than material powers.
+        const frostPrio = canCapitalize ? bestScore * 0.05 : bestScore * 0.035;
         candidates.push({
-          priority: bestScore * 0.06,
+          priority: frostPrio,
           exec: () => castFrost(state, bestTarget.r, bestTarget.c),
           name: 'FROST',
           payload: { power: 'FROST', r: bestTarget.r, c: bestTarget.c }
