@@ -1,0 +1,12 @@
+{
+  "games": [],
+  "summary": {
+    "totalGames": 5,
+    "whiteWins": 0,
+    "blackWins": 0,
+    "avgGameLength": 0,
+    "avgAetherWasteInstances": 0,
+    "avgFountainOccupancy": 0,
+    "avgPowerSpentsPerGame": 0
+  }
+}
