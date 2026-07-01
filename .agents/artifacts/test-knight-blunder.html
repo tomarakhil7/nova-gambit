@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test Knight Blunder Bug</title>
+  <script src="../game/js/chess-engine.js"></script>
+  <script src="../game/js/mana-system.js"></script>
+  <script src="../game/js/bot.js"></script>
+</head>
+<body>
+  <h1>Testing Knight Blunder</h1>
+  <div id="output"></div>
+
+  <script>
+    const output = document.getElementById('output');
+
+    function log(msg) {
+      output.innerHTML += msg + '<br>';
+      console.log(msg);
+    }
+
+    log('='.repeat(60));
+    log('REPRODUCING KNIGHT BLUNDER BUG');
+    log('='.repeat(60));
+
+    // Setup the exact position where bot blundered
+    const state = newGameState();
+
+    // Apply moves leading to the blunder
+    const moves = [
+      // Move 1
+      { from: {r:6, c:4}, to: {r:5, c:4}, color: COLOR.WHITE },  // e2-e3
+      { from: {r:1, c:3}, to: {r:2, c:3}, color: COLOR.BLACK },  // d7-d6
+
+      // Move 2
+      { from: {r:6, c:6}, to: {r:4, c:6}, color: COLOR.WHITE },  // g2-g4
+      { from: {r:1, c:0}, to: {r:3, c:0}, color: COLOR.BLACK },  // a7-a5
+
+      // Move 3
+      { from: {r:6, c:3}, to: {r:4, c:3}, color: COLOR.WHITE },  // d2-d4
+      { from: {r:1, c:7}, to: {r:2, c:7}, color: COLOR.BLACK },  // h7-h6
+
+      // Move 4
+      { from: {r:5, c:4}, to: {r:4, c:4}, color: COLOR.WHITE },  // e3-e4
+      // Black used SPAWN power here (created spectral pawn c5)
+      // Then moved e7-e6
+
+      // Move 5 (from game log - but this is after spawn)
+      // For now, just test without the spawn complication
+    ];
+
+    for (const m of moves) {
+      const piece = state.board[m.from.r][m.from.c];
+      if (!piece) {
+        log(`ERROR: No piece at ${String.fromCharCode(97 + m.from.c)}${8-m.from.r}`);
+        continue;
+      }
+
+      const legal = movesForPiece(state.board, m.from.r, m.from.c, state);
+      const move = legal.find(mv => mv.r === m.to.r && mv.c === m.to.c);
+
+      if (!move) {
+        log(`ERROR: Move not legal`);
+        continue;
+      }
+
+      applyMoveRaw(state.board, m.from.r, m.from.c, move, state);
+      endOfTurn(state);
+
+      log(`Move: ${String.fromCharCode(97 + m.from.c)}${8-m.from.r} → ${String.fromCharCode(97 + m.to.c)}${8-m.to.r}`);
+    }
+
+    log('');
+    log('Current position (Black to move):');
+    log('Turn: ' + state.turnNumber);
+
+    // Print board
+    for (let r = 0; r < 8; r++) {
+      let row = (8-r) + ' ';
+      for (let c = 0; c < 8; c++) {
+        const p = state.board[r][c];
+        if (p) {
+          const sym = PIECE_SYMBOLS[p.type];
+          row += (p.color === COLOR.WHITE ? sym.toUpperCase() : sym.toLowerCase()) + ' ';
+        } else {
+          row += '. ';
+        }
+      }
+      log(row);
+    }
+    log('  a b c d e f g h');
+    log('');
+
+    // Configure bot for HARD difficulty
+    BOT.difficulty = 'hard';
+    log('Bot difficulty: ' + BOT.difficulty);
+    log('');
+
+    // Get all legal moves for Black
+    const allMoves = allLegalMoves(state.board, COLOR.BLACK, state);
+    log(`Black has ${allMoves.length} legal moves`);
+    log('');
+
+    // Let bot choose
+    log('Bot is thinking (7-ply search)...');
+    const chosen = botSearchBestMove(state, allMoves, COLOR.BLACK);
+
+    const from = String.fromCharCode(97 + chosen.from.c) + (8 - chosen.from.r);
+    const to = String.fromCharCode(97 + chosen.to.c) + (8 - chosen.to.r);
+    const piece = state.board[chosen.from.r][chosen.from.c];
+    const pieceName = piece ? PIECE_SYMBOLS[piece.type].toUpperCase() : '?';
+
+    log('');
+    log('='.repeat(60));
+    log(`BOT CHOSE: ${pieceName} ${from}-${to}`);
+    log('='.repeat(60));
+    log('');
+
+    // Score this move
+    const score = botScoreMove(state, chosen.from, chosen.to, COLOR.BLACK);
+    log(`Move score: ${score}`);
+
+    // Evaluate position after this move
+    const snap = snapshot(state.board);
+    const moveInfo = { r: chosen.to.r, c: chosen.to.c, capture: false, castle: false };
+    applyMoveRaw(state.board, chosen.from.r, chosen.from.c, moveInfo, state);
+    const evalAfter = botEvaluate(state, COLOR.BLACK);
+    restore(state.board, snap);
+
+    log(`Position eval after move: ${evalAfter} (Black perspective)`);
+    log('');
+    log('If bot is working correctly, it should NOT hang pieces.');
+    log('Check if the chosen move leaves a piece attacked and undefended.');
+  </script>
+</body>
+</html>

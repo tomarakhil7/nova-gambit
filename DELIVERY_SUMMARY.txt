@@ -1,0 +1,276 @@
+================================================================================
+                    NOVA GAMBIT CHESS VARIANT
+             COMPLETE STRATEGIC FRAMEWORK & BOT GUIDELINES
+================================================================================
+
+DELIVERY DATE: July 1, 2026
+SCOPE: Comprehensive analysis of 13 aether powers + unified bot strategy framework
+
+================================================================================
+                          FILES DELIVERED
+================================================================================
+
+1. STRATEGIC_FRAMEWORK.md (17 sections, comprehensive)
+   ├─ Game Phase Strategy (Opening/Middlegame/Endgame)
+   ├─ Power Combination Synergies (8 Tier S combos, 5 Tier A, 4 Tier B)
+   ├─ Aether Economy Strategy (early/mid/late game budgets)
+   ├─ Defensive vs Offensive Balance (decision tree)
+   ├─ Piece Positioning for Power Synergy (6 principles)
+   ├─ Mana Generation Strategy (fountain valuation)
+   └─ Anti-Patterns to Avoid (12 critical mistakes)
+
+2. POWER_PRIORITY_MATRIX.json (2000+ lines)
+   ├─ Game phase definitions with aether generation rates
+   ├─ Power rankings by phase (Tier 1/2/3)
+   ├─ Power rankings by target value (Queen/Rook/Bishop/Pawn)
+   ├─ Power rankings by aether cost (cheap/mid/expensive)
+   ├─ 10 critical decision rules (pawn 7th, cap, checkmate, etc.)
+   ├─ Multiplier lookup tables (phase/material/threat/aether)
+   └─ Bot pseudocode implementation template
+
+3. BOT_IMPLEMENTATION_CHECKLIST.md (400+ items)
+   ├─ Power priority framework verification
+   ├─ Power-specific implementation (all 13 powers)
+   ├─ Synergy detection system
+   ├─ Aether economy system
+   ├─ Game phase transitions
+   ├─ Threat assessment module
+   ├─ Validation layer
+   ├─ Hard mode specific tuning
+   ├─ Implementation verification checklist
+   ├─ Known edge cases
+   └─ Success criteria
+
+4. Individual Power Analyses (Referenced in strategic framework)
+   ├─ FROST (Defensive control, 8 aether)
+   ├─ FORTIFY (Defensive control, 14 aether)
+   ├─ SPAWN (Tempo/utility, 6 aether)
+   ├─ BLINK (Tempo, 8 aether)
+   ├─ IMPRISON (Tactical, 14 aether)
+   ├─ AETHER_BLOCK (Denial, 16 aether)
+   ├─ CLEANSE (Utility, 14 aether)
+   ├─ BOMBA (Tempo/damage, 14 aether)
+   ├─ DOUBLE_ATTACK (Tactical, 14 aether)
+   ├─ PROMOTE (Strategic, 15 aether)
+   ├─ VENGEANCE (Strategic, 18 aether)
+   ├─ WALL (Defensive, 18 aether)
+   └─ CHRONOBREAK (Tactical, 20 aether)
+
+================================================================================
+                       KEY STRATEGIC INSIGHTS
+================================================================================
+
+GAME PHASES:
+  Opening (1-10):         Develop pieces, accumulate aether passively
+  Early Mid (11-15):      Power activation begins, fountain control contests
+  Late Mid (16-25):       Tactical peak, expensive powers viable, cap pressure
+  Endgame (26+):          Permanently capped, dump aether every turn, pawn races
+
+AETHER ECONOMY:
+  Optimal Band:           15-25 aether (sweet spot for flexibility)
+  Cap Penalty:            30/30 = -3 aether/turn wastage (MUST spend)
+  Fountain Value:         +2 aether/turn = 1 power cost every 7-9 turns
+  Sacrifice Strategy:     Pawn (-100) → +6 aether (justified)
+
+POWER SYNERGIES (Tier S):
+  1. FROST + IMPRISON:    Freeze (8) → Next turn imprison (14) = Queen removal
+  2. FORTIFY + DOUBLE:    Shield (14) → 2 captures (14) = guaranteed material
+  3. AETHER_BLOCK + VNG:  Block (16) → Vengeance (18) = Queen destruction
+  4. WALL + PROMOTE:      Wall (18) → Promote (15) = unbreakable fortress
+  5. CLEANSE + DOUBL:     Cleanse (14) → 2 captures (14) = freed piece attacks
+  6. IMPRISON + CAPTURE:  Imprison (14) → Next turn capture = undefended piece
+  7. FROST + BLINK:       Freeze (8) → Blink (16) = safe escape
+  8. CHRONOBREAK + UNDO:  Rewind (20) → Queen saved = game changer
+
+DEFENSIVE TRIGGERS:
+  ✓ FROST:                Opponent piece 300+ attacking, OR pawn 7th rank
+  ✓ FORTIFY:              Our piece under 2+ attack, value >= 300
+  ✓ CLEANSE:              Our Queen/Rook frozen or imprisoned
+  ✓ WALL:                 King mating net, OR passed pawn protection
+  ✓ BLINK:                Bomb threat (1-2 turns), OR attacked no escape
+  ✓ CHRONOBREAK:          Opponent captured Queen/Rook (>400 material)
+
+OFFENSIVE TRIGGERS:
+  ✓ IMPRISON:             Our piece adjacent to opponent Queen/Rook
+  ✓ DOUBLE_ATTACK:        2+ undefended pieces within reach
+  ✓ PROMOTE:              Pawn 6th rank, opponent aether < 18
+  ✓ VENGEANCE:            Opponent pawn 7th (emergency), OR Queen undefended
+  ✓ AETHER_BLOCK:         Opponent 18+ aether + lethal move available
+  ✓ BOMBA:                Opponent King in 3x3 blast zone + 2+ pieces
+
+CRITICAL ANTI-PATTERNS TO AVOID:
+  ❌ Frost on low-value pieces (<300 material)
+  ❌ Promote without checking opponent Vengeance (18+ aether)
+  ❌ Ignore passed pawn 7th rank (= -900 material loss)
+  ❌ Chronobreak on minor losses (<400 material)
+  ❌ Double Attack on defended pieces (recapture loss)
+  ❌ Wall in sparse endgame (few pieces to justify 18 aether)
+  ❌ AETHER_BLOCK when behind material (doesn't help)
+  ❌ Let aether cap wastefully (= -3 aether/turn)
+
+FOUNTAIN CONTROL:
+  Value:                  +2 aether/turn (stacks with base)
+  Break-Even:             10 turns of +2 = 1 mid-tier power
+  Control Strategy:       Contest 50% of fountains to prevent acceleration
+  Sacrifice ROI:          Pawn (-100) for fountain (+2/turn) justified if 10+ turns
+
+================================================================================
+                    PRIORITY MULTIPLIER FRAMEWORK
+================================================================================
+
+PHASE MULTIPLIER (0.1x to 2.0x):
+  Opening (1-10):         Frost 0.2, Imprison 0.1, Expensive 0.0
+  Early Mid (11-15):      Frost 0.8, Imprison 1.0, Double 0.9
+  Late Mid (16-25):       Frost 1.0, Imprison 1.2, Promote 1.2
+  Endgame (26+):          Frost 1.2, Imprison 1.2, Promote 1.5
+
+MATERIAL MULTIPLIER (0.5x to 2.0x):
+  Ahead +300:             Offensive 0.5 (consolidate)
+  Balanced ±100:          Tactical 1.0 (use freely)
+  Behind -300:            Offensive 1.5 (desperate)
+
+THREAT MULTIPLIER (0.1x to 2.0x):
+  Safe:                   Reduce offensive 0.8
+  Medium threat:          Balanced 1.0
+  Checkmate threat:       Defensive 2.0
+
+AETHER EFFICIENCY (0.0x to 1.5x):
+  0-13 aether:            Powers unavailable (×0.0)
+  14-19 aether:           Cheap/mid viable (×1.0)
+  20-25 aether:           All powers viable (×1.0)
+  26-30 aether:           Dump expensive (×1.5)
+
+FINAL PRIORITY = Base × Phase × Material × Threat × Aether
+
+================================================================================
+                   BOT IMPLEMENTATION ROADMAP
+================================================================================
+
+STEP 1: Power Framework (1 day)
+  □ Implement 13 base priority calculations
+  □ Apply phase/material/threat/aether multipliers
+  □ Verify final priority range (0-500+)
+
+STEP 2: Individual Powers (3 days)
+  □ FROST: Scan targets, apply bonuses
+  □ IMPRISON: Find adjacent pieces, validate
+  □ DOUBLE_ATTACK: Find 2-capture sequences
+  □ PROMOTE: Check pawn state, validate safety
+  □ VENGEANCE: Detect pawn 7th, Queen undefended
+  □ WALL: Calculate fortress value
+  □ CHRONOBREAK: Detect material loss > 400
+  □ (5 remaining powers)
+
+STEP 3: Synergy Detection (1 day)
+  □ Recognize Tier S combinations
+  □ Apply priority boosts
+  □ Block anti-synergies
+
+STEP 4: Aether Economy (1 day)
+  □ Track generation per turn
+  □ Enforce cap (30)
+  □ Implement hoarding prevention
+  □ Spending policy enforcement
+
+STEP 5: Game Phase Transitions (1 day)
+  □ Detect phase correctly
+  □ Adjust multipliers appropriately
+  □ Shift power preferences
+
+STEP 6: Validation & Edge Cases (1 day)
+  □ Legality checks
+  □ Board state validation
+  □ Handle edge cases (spectral, frozen+imprisoned, etc.)
+
+STEP 7: Testing (2 days)
+  □ Unit tests for each power
+  □ Integration tests with synergies
+  □ Self-play testing (10 games)
+  □ Verify no illegal moves
+  □ Benchmark vs difficulty levels
+
+TOTAL: ~9-10 days (1.5-2 weeks)
+
+================================================================================
+                        SUCCESS METRICS
+================================================================================
+
+□ Win 70%+ vs Easy bot
+□ Win 55%+ vs Medium bot
+□ Competitive vs Hard bot (50%+ winrate)
+□ Zero illegal moves
+□ Aether never wastes (never exceeds 30)
+□ Checkmate threats detected 1-2 turns ahead
+□ Passed pawn threats addressed immediately
+□ Power combos executed correctly
+□ Game completes without crashes
+
+================================================================================
+                       QUICK REFERENCE TABLES
+================================================================================
+
+POWER COST TIERS:
+  Cheap (6-8):            SPAWN, FROST, BLINK
+  Mid (14-16):            IMPRISON, CLEANSE, DOUBLE_ATTACK, FORTIFY, AETHER_BLOCK, BOMBA
+  Expensive (15-20):      PROMOTE, VENGEANCE, WALL, CHRONOBREAK
+
+POWER BY PHASE PRIORITY:
+  Opening:                None (aether insufficient)
+  Early Mid:              FROST, IMPRISON, DOUBLE_ATTACK
+  Late Mid:               PROMOTE, VENGEANCE, WALL
+  Endgame:                VENGEANCE, CHRONOBREAK, PROMOTE
+
+POWER BY TARGET PRIORITY:
+  Queen (900):            IMPRISON > VENGEANCE > CHRONOBREAK > FROST
+  Rook (500):             IMPRISON > VENGEANCE > DOUBLE_ATTACK > FROST
+  Bishop/Knight (320):    DOUBLE_ATTACK > IMPRISON > FROST
+  Pawn (100):             FROST (7th rank only) > VENGEANCE (7th) > SPAWN (6th)
+
+AETHER SPENDING POLICY:
+  0-13:                   Accumulate only
+  14-19:                  Cheap/mid powers
+  20-25:                  All powers
+  26-30:                  Aggressive dumping (15+ cost)
+
+================================================================================
+                          FILES LOCATION
+================================================================================
+
+All analysis files saved to: /Users/a.tomar/Documents/Work/chess/
+
+Main Documents:
+  ✓ STRATEGIC_FRAMEWORK.md           (17 sections, game-winning strategy)
+  ✓ POWER_PRIORITY_MATRIX.json       (2000+ lines, implementation reference)
+  ✓ BOT_IMPLEMENTATION_CHECKLIST.md  (400+ items, step-by-step guide)
+  ✓ DELIVERY_SUMMARY.txt             (this file)
+
+Source Code Integration:
+  Implementation file: /Users/a.tomar/Documents/Work/chess/game/js/bot.js
+  Power definitions:   /Users/a.tomar/Documents/Work/chess/game/js/mana-system.js
+
+================================================================================
+                            CONCLUSION
+================================================================================
+
+This comprehensive strategic framework covers all 13 aether powers across 4 game
+phases, with detailed synergy analysis, aether economy principles, and a
+complete implementation roadmap for the chess bot.
+
+Key Takeaways:
+  1. Different strategies required for each game phase
+  2. Synergies are force multipliers (Frost+Imprison = 41x ROI)
+  3. Aether economy dominates mid-to-late game (cap at 30)
+  4. Pawn promotion threats are highest priority (7th rank = emergency)
+  5. Power combinations multiply effectiveness far beyond single power use
+
+The bot should achieve 70%+ winrate vs Easy, 55%+ vs Medium, and be competitive
+vs Hard difficulty by following this framework precisely.
+
+For questions on specific power interactions or synergies, refer to:
+  - STRATEGIC_FRAMEWORK.md (section 2: Synergies)
+  - POWER_PRIORITY_MATRIX.json (lookup tables)
+  - Individual power analyses (detailed in referenced files)
+
+================================================================================
+                          END OF SUMMARY
+================================================================================

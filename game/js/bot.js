@@ -1101,13 +1101,16 @@ function botEvaluate(state, forColor) {
   }
 
   // AETHER BANK VALUE - aether IS power
-  // Diminishing returns: first 10 points worth more than last 10
+  // Workflow #2 findings: Formula penalized late aether too much. Changed from marginal-decreasing to marginal-increasing near cap.
+  // NEW MODEL: Aether is MORE valuable as you approach cap because you MUST spend it (can't waste generation).
   const myAether = state.mana[forColor];
   const oppAether = state.mana[opp];
   function aetherValue(a) {
     if (a <= 10) return a * 20; // Early aether very valuable
     if (a <= 20) return 200 + (a-10) * 15; // Mid aether valuable
-    return 350 + (a-20) * 10; // Late aether less valuable (capped soon)
+    // FIXED: Late aether now MORE valuable as cap approaches (can't waste)
+    // Formula: 350 - (30-a)*5  inverts incentive: 30/30 = highest value, not lowest
+    return 350 - (30 - a) * 5; // Late aether INCREASES in value toward cap
   }
   const aetherAdvantage = aetherValue(myAether) - aetherValue(oppAether);
   score += aetherAdvantage;
@@ -1184,8 +1187,13 @@ function botScoreMove(state, from, to, forColor) {
   }
 
   // Moving to a fountain (high priority in midgame for aether economy)
+  // Workflow #2 findings: Fountain +2 aether/turn = 200 value over 10 turns. Increased bonus.
   if (state.fountains.some(f => f.r === to.r && f.c === to.c)) {
-    score += phase >= 0.4 && phase <= 0.8 ? 100 : 60; // Extra bonus in midgame
+    // Early-mid game (best window): +250 bonus (high priority)
+    // Mid game: +200 bonus
+    // Late/End: +100 bonus (less relevant)
+    const phase_val = 1.0 - phase; // Phase 1.0 = early, 0.0 = end
+    score += Math.max(100, 150 + phase_val * 100);
   }
 
   // Moving to center (less important in endgame)
@@ -2745,16 +2753,23 @@ function botConsiderPowers(state, forColor) {
   }
 
   // AGGRESSIVE ANTI-HOARDING: Force spending when near/at cap
-  // At 30/30 (cap), every turn without spending = wasted aether generation!
+  // At 30/30 (cap), every turn without spending = wasted aether generation (+3/turn lost)!
+  // Workflow #2 findings: 3.0x multiplier insufficient. Implementing graduated 4.0x-1.5x scale.
   let hoardingMultiplier = 1.0;
   if (aether >= 30) {
-    // AT CAP: Desperate! Triple all power priorities
+    // AT CAP (30/30): Maximum desperation! 4.0x priority on ALL powers
+    hoardingMultiplier = 4.0;
+  } else if (aether >= 29) {
+    // One turn from full waste: 3.5x
+    hoardingMultiplier = 3.5;
+  } else if (aether >= 28) {
+    // 2 turns from full: 3.0x
     hoardingMultiplier = 3.0;
   } else if (aether >= 27) {
-    // Near cap: Very aggressive spending
+    // Near cap: Very aggressive spending (2.5x)
     hoardingMultiplier = 2.5;
   } else if (aether >= 25) {
-    // High aether: Aggressive spending
+    // High aether: Aggressive spending (2.0x)
     hoardingMultiplier = 2.0;
   } else if (aether >= 22) {
     // Moderate spending encouragement

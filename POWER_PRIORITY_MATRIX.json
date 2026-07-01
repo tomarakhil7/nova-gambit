@@ -1,0 +1,443 @@
+{
+  "nova_gambit_power_priority_matrix": {
+    "metadata": {
+      "version": "2.0",
+      "created": "2026-07-01",
+      "description": "Complete bot decision matrix for all 13 aether powers across game phases",
+      "file_location": "/Users/a.tomar/Documents/Work/chess/game/js/bot.js",
+      "note": "Use this matrix to assign priority scores in bot evaluation function"
+    },
+    "game_phases": {
+      "opening": {
+        "turns": "1-10",
+        "aether_generation": "+1/turn",
+        "typical_aether_at_phase_end": "10",
+        "strategic_focus": "Piece development, fountain control setup",
+        "power_casting_frequency": "<5% of turns"
+      },
+      "early_middlegame": {
+        "turns": "11-15",
+        "aether_generation": "+2/turn",
+        "typical_aether_at_phase_end": "20",
+        "strategic_focus": "Active power use, fountain control, material swings",
+        "power_casting_frequency": "40-60% of turns"
+      },
+      "late_middlegame": {
+        "turns": "16-25",
+        "aether_generation": "+2/turn",
+        "typical_aether_at_phase_end": "30 (capped)",
+        "strategic_focus": "Tactical peaks, aether hoarding, consolidation",
+        "power_casting_frequency": "50-70% of turns"
+      },
+      "endgame": {
+        "turns": "26+",
+        "aether_generation": "+3/turn (baseline) +2-4 per fountain",
+        "typical_aether_at_phase_end": "30 (permanently capped)",
+        "strategic_focus": "Pawn races, mating nets, piece value maximization",
+        "power_casting_frequency": "70-90% of turns (must dump aether)"
+      }
+    },
+    "power_priority_rankings": {
+      "by_game_phase": {
+        "opening": {
+          "tier_1_must_use": ["NONE (aether insufficient)"],
+          "tier_2_conditional": [],
+          "tier_3_avoid": ["All powers cost > 8"]
+        },
+        "early_middlegame": {
+          "tier_1_must_use": [
+            "FROST (8) - if target 300+",
+            "IMPRISON (14) - remove defender",
+            "DOUBLE_ATTACK (14) - undefended cluster"
+          ],
+          "tier_2_conditional": [
+            "CLEANSE (14) - free Queen/Rook",
+            "FORTIFY (14) - shield key piece",
+            "BLINK (8) - escape + position"
+          ],
+          "tier_3_avoid": [
+            "VENGEANCE (18) - too expensive, material not critical yet",
+            "WALL (18) - sparse board, limited value",
+            "CHRONOBREAK (20) - reserve for big material swings"
+          ]
+        },
+        "late_middlegame": {
+          "tier_1_must_use": [
+            "PROMOTE (15) - pawn 6th rank",
+            "VENGEANCE (18) - Queen/Rook threat OR pawn 7th",
+            "IMPRISON (14) - key defender setup",
+            "DOUBLE_ATTACK (14) - multiple undefended pieces"
+          ],
+          "tier_2_conditional": [
+            "WALL (18) - fortress setup",
+            "AETHER_BLOCK (16) - opponent 18+ aether",
+            "FROST (8) - high-value target",
+            "CHRONOBREAK (20) - major material loss"
+          ],
+          "tier_3_avoid": [
+            "SPAWN (6) - only non-promotion pawn threat",
+            "CLEANSE (14) - unless Queen/Rook imprisoned",
+            "BLINK (8) - unless bomb threat"
+          ]
+        },
+        "endgame": {
+          "tier_1_must_use": [
+            "VENGEANCE (18) - opponent pawn 7th/Queen threat",
+            "CHRONOBREAK (20) - opponent mating attack",
+            "WALL (18) - mating net OR fortress",
+            "PROMOTE (15) - pawn 6th-7th rank"
+          ],
+          "tier_2_conditional": [
+            "BLINK (8) - approach enemy King OR escape",
+            "FROST (8) - block passed pawn threat",
+            "CLEANSE (14) - free trapped piece",
+            "IMPRISON (14) - trap last defender"
+          ],
+          "tier_3_avoid": [
+            "DOUBLE_ATTACK (14) - few pieces available",
+            "AETHER_BLOCK (16) - aether reaccumulates fast",
+            "SPAWN (6) - almost no value",
+            "BOMBA (14) - sparse board"
+          ]
+        }
+      },
+      "by_target_value": {
+        "target_queen_900": {
+          "powers_ranked": [
+            "1. IMPRISON (14) - ROI: 64x",
+            "2. VENGEANCE (18) - ROI: 50x",
+            "3. CHRONOBREAK (20) - ROI: 45x (to save Queen)",
+            "4. FROST (8) - ROI: 112x"
+          ],
+          "priority_multiplier": "1.5x base"
+        },
+        "target_rook_500": {
+          "powers_ranked": [
+            "1. IMPRISON (14) - ROI: 35x",
+            "2. VENGEANCE (18) - ROI: 28x",
+            "3. DOUBLE_ATTACK (14) - ROI: 36x (if 2 undefended)",
+            "4. FROST (8) - ROI: 62x"
+          ],
+          "priority_multiplier": "1.3x base"
+        },
+        "target_bishop_knight_320": {
+          "powers_ranked": [
+            "1. DOUBLE_ATTACK (14) - ROI: 23x (with 2 targets)",
+            "2. IMPRISON (14) - ROI: 23x",
+            "3. FROST (8) - ROI: 40x"
+          ],
+          "priority_multiplier": "1.0x base"
+        },
+        "target_pawn_100": {
+          "powers_ranked": [
+            "1. FROST (8) if pawn 7th rank - ROI: 125x",
+            "2. VENGEANCE (18) if pawn 7th - ROI: 5.5x (but prevents Queen)",
+            "3. SPAWN (6) if blocking 6th rank - ROI: 16x"
+          ],
+          "priority_multiplier": "0.5x base (unless 7th rank: then 2.0x)"
+        }
+      },
+      "by_aether_cost": {
+        "cheap_powers": {
+          "FROST_8": {
+            "use_condition": "Target value >= 300 OR pawn 7th rank",
+            "priority_base": "150-200 (if good target)",
+            "game_phase_priority": "high in all phases (efficient ROI)"
+          },
+          "BLINK_8": {
+            "use_condition": "Escape OR fountain position OR endgame approach",
+            "priority_base": "80-120 (if threatened)",
+            "game_phase_priority": "low opening, medium mid, high endgame"
+          },
+          "SPAWN_6": {
+            "use_condition": "Block pawn 6th rank OR dump aether at cap",
+            "priority_base": "20-50 (situational)",
+            "game_phase_priority": "almost never (1-5% frequency)"
+          }
+        },
+        "mid_tier_powers": {
+          "IMPRISON_14": {
+            "use_condition": "Adjacent to Queen/Rook OR remove defender",
+            "priority_base": "400-600 (excellent ROI)",
+            "game_phase_priority": "high mid-game (40-50% of powers cast)"
+          },
+          "CLEANSE_14": {
+            "use_condition": "Free Queen/Rook/endgame pawn",
+            "priority_base": "80-150 (conditional on trapped piece)",
+            "game_phase_priority": "medium mid-game, low endgame"
+          },
+          "DOUBLE_ATTACK_14": {
+            "use_condition": "2+ undefended pieces within reach",
+            "priority_base": "300-500 (material gain)",
+            "game_phase_priority": "high mid-game (30-40% frequency)"
+          },
+          "FORTIFY_14": {
+            "use_condition": "Shield high-value piece (300+) under attack",
+            "priority_base": "200-300 (defensive value)",
+            "game_phase_priority": "medium mid-game, low endgame"
+          },
+          "AETHER_BLOCK_16": {
+            "use_condition": "Opponent 18+ aether + lethal move available",
+            "priority_base": "40-70 (conditional on aether level)",
+            "game_phase_priority": "medium mid-game (15-20% frequency)"
+          },
+          "BOMBA_14": {
+            "use_condition": "Opponent King in 3x3 blast + 2+ pieces",
+            "priority_base": "100-200 (positional control)",
+            "game_phase_priority": "medium mid-game, low endgame"
+          }
+        },
+        "expensive_powers": {
+          "PROMOTE_15": {
+            "use_condition": "Pawn 6th rank + opponent aether < 16",
+            "priority_base": "350-400 (Queen spawn = 900)",
+            "game_phase_priority": "high late-mid, critical endgame"
+          },
+          "WALL_18": {
+            "use_condition": "Mating net OR fortress for passed pawn",
+            "priority_base": "200-300 (positional gain)",
+            "game_phase_priority": "low opening, medium mid-late, high endgame"
+          },
+          "VENGEANCE_18": {
+            "use_condition": "Opponent pawn 7th rank (emergency) OR Queen/Rook threat",
+            "priority_base": "400-700 (material + material threat)",
+            "game_phase_priority": "low mid, high late-mid, critical endgame"
+          },
+          "CHRONOBREAK_20": {
+            "use_condition": "Opponent captured Queen/Rook (>400 material) OR mating attack",
+            "priority_base": "250-500 (material recovery + tempo)",
+            "game_phase_priority": "low mid (expensive), high late-mid/endgame"
+          }
+        }
+      }
+    },
+    "critical_decision_rules": {
+      "rule_1_pawn_promotion_threat": {
+        "description": "Opponent pawn on 7th rank = HIGHEST PRIORITY",
+        "action": "FROST or VENGEANCE to stop pawn",
+        "priority_override": "+750 bonus",
+        "exceptions": "None - always respond to 7th rank pawn"
+      },
+      "rule_2_aether_cap": {
+        "description": "At 30/30 aether = generation active",
+        "action": "MUST SPEND power each turn or lose 3 aether/turn",
+        "priority_override": "Any power >= 20 aether cost is automatic cast",
+        "exceptions": "Save 20 aether only if opponent King has 1-2 escape (Chronobreak ready)"
+      },
+      "rule_3_checkmate_threat": {
+        "description": "If opponent threatens mate in 1-2 moves",
+        "action": "Defensive power (Fortify/Cleanse/Wall/Blink/Chronobreak)",
+        "priority_override": "Ignore offensive opportunities, defend immediately",
+        "exceptions": "If your move delivers mate, do that instead"
+      },
+      "rule_4_vengeance_trap": {
+        "description": "Before promoting, check opponent aether >= 18",
+        "action": "If opponent 18+ aether AND own Queen undefended: DON'T promote",
+        "priority_override": "FORTIFY Queen after promoting (chain powers)",
+        "exceptions": "If promotion delivers checkmate, ignore Vengeance threat"
+      },
+      "rule_5_fountain_control": {
+        "description": "Each fountain = +2 aether/turn (stacks with base +2)",
+        "action": "Contest 50% of fountains to prevent opponent acceleration",
+        "priority_override": "+100 priority if contested fountain at stake",
+        "exceptions": "Yield if sacrifice >200 material to take fountain"
+      },
+      "rule_6_material_balance": {
+        "description": "Track material delta (yours - opponent's)",
+        "action": "If down 200+: Aggressive powers (Vengeance/Imprison); If up 200+: Consolidate",
+        "priority_override": "Desperation multiplier ×1.5 if down material",
+        "exceptions": "Checkmate threats override material balance"
+      },
+      "rule_7_adjacent_imprison": {
+        "description": "Own piece adjacent to opponent piece = IMPRISON opportunity",
+        "action": "If target is Queen/Rook: CAST IMPRISON (ROI 35-64x)",
+        "priority_override": "+100 priority per high-value adjacent piece",
+        "exceptions": "Skip if opponent piece defended 2x+ (imprisonment fails)"
+      },
+      "rule_8_double_attack_clustering": {
+        "description": "2+ undefended opponent pieces in reach = DOUBLE_ATTACK opportunity",
+        "action": "CAST DOUBLE_ATTACK (ROI 20-40x)",
+        "priority_override": "+80 priority per additional undefended piece",
+        "exceptions": "Skip if 1st capture defended (recapture = material loss)"
+      },
+      "rule_9_shield_breach": {
+        "description": "Opponent Queen shielded = shield blocks 1 attack",
+        "action": "Use DOUBLE_ATTACK to breach (1st hit absorbs shield, 2nd hits Queen)",
+        "priority_override": "+50 priority if can breach + capture",
+        "exceptions": "Skip if Queen defended after shield breaks"
+      },
+      "rule_10_aether_reserves": {
+        "description": "Maintain 14+ aether buffer for emergency defense",
+        "action": "Never drop below 14 aether if opponent has powers available",
+        "priority_override": "Reduce offensive priority if reserves <14",
+        "exceptions": "At cap (30): Spend liberally, reserves always regenerate"
+      }
+    },
+    "bot_implementation_pseudocode": {
+      "priority_calculation_function": {
+        "input": ["current_board_state", "my_aether", "opponent_aether", "game_phase", "material_delta"],
+        "output": "priority_scores for all 13 powers",
+        "algorithm": "For each power: calculate base_priority, apply phase_multiplier, apply material_multiplier, apply threat_multiplier, add bonuses/penalties"
+      },
+      "pseudo_code": [
+        "function calculatePriorityScores(state, myColor) {",
+        "  const allPowers = [FROST, FORTIFY, SPAWN, BLINK, IMPRISON, AETHER_BLOCK, CLEANSE, BOMBA, DOUBLE_ATTACK, PROMOTE, VENGEANCE, WALL, CHRONOBREAK];",
+        "  const priorities = {};",
+        "  ",
+        "  for (const power of allPowers) {",
+        "    if (state.mana[myColor] < power.cost) {",
+        "      priorities[power] = 0; // Can't afford",
+        "      continue;",
+        "    }",
+        "    ",
+        "    // Calculate base priority based on power type",
+        "    let basePriority = 0;",
+        "    switch(power) {",
+        "      case FROST:",
+        "        basePriority = evaluateFrostTargets(state, myColor);",
+        "        break;",
+        "      case IMPRISON:",
+        "        basePriority = evaluateImprisonTargets(state, myColor);",
+        "        break;",
+        "      case DOUBLE_ATTACK:",
+        "        basePriority = evaluateDoubleAttackSequences(state, myColor);",
+        "        break;",
+        "      case PROMOTE:",
+        "        basePriority = evaluatePromotionSequences(state, myColor);",
+        "        break;",
+        "      case VENGEANCE:",
+        "        basePriority = evaluateVengeanceTargets(state, myColor);",
+        "        break;",
+        "      // ... other powers",
+        "    }",
+        "    ",
+        "    // Apply multipliers based on game state",
+        "    const phaseMultiplier = calculatePhaseMultiplier(state.turnNumber);",
+        "    const materialMultiplier = calculateMaterialMultiplier(state, myColor);",
+        "    const threatMultiplier = calculateThreatMultiplier(state, myColor);",
+        "    ",
+        "    const finalPriority = basePriority * phaseMultiplier * materialMultiplier * threatMultiplier;",
+        "    priorities[power] = finalPriority;",
+        "  }",
+        "  ",
+        "  return priorities;",
+        "}"
+      ]
+    },
+    "multiplier_lookup_tables": {
+      "phase_multiplier": {
+        "opening_1_10": {
+          "FROST": 0.2,
+          "BLINK": 0.1,
+          "IMPRISON": 0.1,
+          "PROMOTE": 0.05,
+          "VENGEANCE": 0.05,
+          "all_expensive_18_20": 0.0
+        },
+        "early_middlegame_11_15": {
+          "FROST": 0.8,
+          "BLINK": 0.5,
+          "IMPRISON": 1.0,
+          "DOUBLE_ATTACK": 0.9,
+          "PROMOTE": 0.6,
+          "VENGEANCE": 0.3,
+          "WALL": 0.4,
+          "CHRONOBREAK": 0.5
+        },
+        "late_middlegame_16_25": {
+          "FROST": 1.0,
+          "IMPRISON": 1.2,
+          "PROMOTE": 1.2,
+          "VENGEANCE": 0.8,
+          "WALL": 0.8,
+          "CHRONOBREAK": 1.0,
+          "AETHER_BLOCK": 1.1
+        },
+        "endgame_26_plus": {
+          "FROST": 1.2,
+          "BLINK": 1.5,
+          "PROMOTE": 1.5,
+          "VENGEANCE": 1.4,
+          "WALL": 1.3,
+          "CHRONOBREAK": 1.5,
+          "IMPRISON": 1.2,
+          "FORTIFY": 1.0,
+          "DOUBLE_ATTACK": 0.5
+        }
+      },
+      "material_balance_multiplier": {
+        "ahead_300_plus": {
+          "offensive_powers": 0.5,
+          "defensive_powers": 0.7,
+          "consolidation_moves": 1.5
+        },
+        "ahead_100_300": {
+          "offensive_powers": 0.8,
+          "defensive_powers": 1.0,
+          "consolidation_moves": 1.2
+        },
+        "balanced_within_100": {
+          "offensive_powers": 1.0,
+          "defensive_powers": 1.0,
+          "tactical_powers": 1.2
+        },
+        "behind_100_300": {
+          "offensive_powers": 1.2,
+          "defensive_powers": 1.1,
+          "recovery_powers": 1.5
+        },
+        "behind_300_plus": {
+          "offensive_powers": 1.5,
+          "desperate_powers": 2.0,
+          "movement_only": 0.5
+        }
+      },
+      "threat_level_multiplier": {
+        "safe_no_threats": {
+          "all_powers": 0.8,
+          "defensive_powers": 0.5
+        },
+        "medium_threat_1_piece_attacking": {
+          "defensive_powers": 1.2,
+          "counter_attacks": 1.0
+        },
+        "high_threat_multiple_pieces": {
+          "defensive_powers": 1.5,
+          "escape_powers": 1.8,
+          "aggressive_powers": 0.6
+        },
+        "critical_checkmate_threat": {
+          "defensive_powers": 2.0,
+          "chronobreak": 2.0,
+          "offensive_powers": 0.1
+        }
+      },
+      "opponent_aether_multiplier": {
+        "0_8_aether": {
+          "AETHER_BLOCK": 0.0,
+          "CHRONOBREAK": 1.0
+        },
+        "9_14_aether": {
+          "AETHER_BLOCK": 0.5,
+          "CHRONOBREAK": 1.0
+        },
+        "15_18_aether": {
+          "AETHER_BLOCK": 1.0,
+          "CHRONOBREAK": 1.2,
+          "PROMOTE": 0.5
+        },
+        "19_25_aether": {
+          "AETHER_BLOCK": 1.2,
+          "CHRONOBREAK": 1.5,
+          "PROMOTE": 0.3,
+          "VENGEANCE": 0.7
+        },
+        "26_30_aether": {
+          "AETHER_BLOCK": 1.5,
+          "CHRONOBREAK": 2.0,
+          "DEFENSIVE": 2.0
+        }
+      }
+    }
+  }
+}
